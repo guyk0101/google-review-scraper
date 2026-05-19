@@ -16,6 +16,7 @@ function parseArgs(argv) {
     outputDir: process.env.OUTPUT_DIR || DEFAULT_OUTPUT_DIR,
     headless: process.env.HEADLESS !== "false",
     locale: process.env.LOCALE || DEFAULT_LOCALE,
+    profileDir: process.env.PROFILE_DIR || "",
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -39,6 +40,9 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--locale" && next) {
       options.locale = next;
+      i += 1;
+    } else if (arg === "--profile-dir" && next) {
+      options.profileDir = next;
       i += 1;
     } else if (arg === "--headed") {
       options.headless = false;
@@ -78,8 +82,43 @@ Options:
   --max-scrolls <number>    Safety limit for review-feed scrolling. Default: 120
   --output-dir <path>       Directory for reviews.json, reviews.csv, and screenshot
   --locale <locale>         Browser locale. Default: zh-TW
+  --profile-dir <path>      Reuse a persistent Chromium profile for login/session state
   --headed                  Show Chromium while scraping
 `);
+}
+
+async function launchBrowser(chromium, options) {
+  const browserOptions = {
+    headless: options.headless,
+    locale: options.locale,
+    viewport: { width: 1440, height: 1200 },
+  };
+
+  if (options.profileDir) {
+    const profileDir = path.resolve(options.profileDir);
+    fs.mkdirSync(profileDir, { recursive: true });
+    console.log(`Using persistent profile: ${profileDir}`);
+
+    const context = await chromium.launchPersistentContext(profileDir, browserOptions);
+    const pages = context.pages();
+    const page = pages[0] || (await context.newPage());
+
+    return {
+      page,
+      close: () => context.close(),
+    };
+  }
+
+  const browser = await chromium.launch({ headless: options.headless });
+  const page = await browser.newPage({
+    locale: options.locale,
+    viewport: { width: 1440, height: 1200 },
+  });
+
+  return {
+    page,
+    close: () => browser.close(),
+  };
 }
 
 function subtractMonths(date, months) {
@@ -500,11 +539,8 @@ async function main() {
 
   fs.mkdirSync(outputDir, { recursive: true });
 
-  const browser = await chromium.launch({ headless: options.headless });
-  const page = await browser.newPage({
-    locale: options.locale,
-    viewport: { width: 1440, height: 1200 },
-  });
+  const browserSession = await launchBrowser(chromium, options);
+  const { page } = browserSession;
 
   try {
     console.log(`Opening ${options.url}`);
@@ -559,7 +595,7 @@ async function main() {
     console.error(`Wrote ${failureHtmlPath}`);
     throw error;
   } finally {
-    await browser.close();
+    await browserSession.close();
   }
 }
 
