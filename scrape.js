@@ -5,6 +5,7 @@ const DEFAULT_LOCALE = "zh-TW";
 const DEFAULT_RANGE = "six-months";
 const DEFAULT_MAX_SCROLLS = 120;
 const DEFAULT_OUTPUT_DIR = "output";
+const REVIEW_CARD_SELECTOR = 'div[data-review-id], div.jftiEf';
 
 function parseArgs(argv) {
   const options = {
@@ -229,6 +230,10 @@ async function openReviews(page) {
 
   const reviewSelectors = [
     'button[jsaction*="pane.reviewChart.moreReviews"]',
+    'button[aria-label*="評論"]',
+    'button[aria-label*="Reviews"]',
+    '[role="tab"]:has-text("評論")',
+    '[role="tab"]:has-text("Reviews")',
     'button:has-text("評論")',
     'button:has-text("Reviews")',
     'a:has-text("評論")',
@@ -240,7 +245,7 @@ async function openReviews(page) {
     if (await locator.count()) {
       try {
         await locator.click({ timeout: 10000 });
-        await page.locator('div[role="feed"]').waitFor({ timeout: 20000 });
+        await page.locator(REVIEW_CARD_SELECTOR).first().waitFor({ timeout: 20000 });
         return;
       } catch (error) {
         console.log(`Could not open reviews with selector ${selector}: ${error.message}`);
@@ -248,7 +253,7 @@ async function openReviews(page) {
     }
   }
 
-  await page.locator('div[role="feed"]').waitFor({ timeout: 20000 });
+  await page.locator(REVIEW_CARD_SELECTOR).first().waitFor({ timeout: 20000 });
 }
 
 async function sortNewest(page) {
@@ -291,7 +296,7 @@ async function sortNewest(page) {
 }
 
 async function extractReviews(page) {
-  return page.$$eval('div[data-review-id]', (nodes) => {
+  return page.$$eval('div[data-review-id], div.jftiEf', (nodes) => {
     return nodes.map((node) => {
       const bySelector = (selector) => node.querySelector(selector)?.textContent?.trim() || "";
       const author =
@@ -339,6 +344,57 @@ async function extractReviews(page) {
   });
 }
 
+async function scrollReviewContainer(page) {
+  return page.evaluate((reviewSelector) => {
+    const firstReview = document.querySelector(reviewSelector);
+    if (!firstReview) {
+      return { scrolled: false, reason: "no-review-card" };
+    }
+
+    let current = firstReview.parentElement;
+    let best = null;
+
+    while (current && current !== document.body) {
+      const style = window.getComputedStyle(current);
+      const canScroll =
+        current.scrollHeight > current.clientHeight + 50 &&
+        !["hidden", "clip"].includes(style.overflowY);
+
+      if (canScroll) {
+        best = current;
+        break;
+      }
+
+      current = current.parentElement;
+    }
+
+    if (!best) {
+      const candidates = Array.from(document.querySelectorAll("div")).filter((element) => {
+        const style = window.getComputedStyle(element);
+        return (
+          element.scrollHeight > element.clientHeight + 100 &&
+          element.clientHeight > 300 &&
+          !["hidden", "clip"].includes(style.overflowY)
+        );
+      });
+      best = candidates.sort((a, b) => b.scrollHeight - a.scrollHeight)[0] || null;
+    }
+
+    if (!best) {
+      window.scrollTo(0, document.body.scrollHeight);
+      return { scrolled: true, reason: "window" };
+    }
+
+    best.scrollTop = best.scrollHeight;
+    return {
+      scrolled: true,
+      reason: "container",
+      className: best.className,
+      ariaLabel: best.getAttribute("aria-label") || "",
+    };
+  }, REVIEW_CARD_SELECTOR);
+}
+
 function normalizeReviews(reviews, cutoffDate) {
   const seen = new Set();
 
@@ -376,8 +432,7 @@ function shouldStopForSixMonths(reviews, cutoffDate) {
 }
 
 async function scrollReviews(page, options, cutoffDate) {
-  const feed = page.locator('div[role="feed"]').first();
-  await feed.waitFor({ timeout: 30000 });
+  await page.locator(REVIEW_CARD_SELECTOR).first().waitFor({ timeout: 30000 });
 
   let previousCount = 0;
   let staleScrolls = 0;
@@ -406,9 +461,7 @@ async function scrollReviews(page, options, cutoffDate) {
       return normalized;
     }
 
-    await feed.evaluate((element) => {
-      element.scrollTop = element.scrollHeight;
-    });
+    await scrollReviewContainer(page);
     await page.waitForTimeout(1800);
   }
 
@@ -471,6 +524,16 @@ async function main() {
     console.log(`Wrote ${jsonPath}`);
     console.log(`Wrote ${csvPath}`);
     console.log(`Wrote ${screenshotPath}`);
+  } catch (error) {
+    const failureScreenshotPath = path.join(outputDir, "failure-page.png");
+    const failureHtmlPath = path.join(outputDir, "failure-page.html");
+
+    await page.screenshot({ path: failureScreenshotPath, fullPage: true }).catch(() => {});
+    fs.writeFileSync(failureHtmlPath, await page.content().catch(() => ""));
+
+    console.error(`Wrote ${failureScreenshotPath}`);
+    console.error(`Wrote ${failureHtmlPath}`);
+    throw error;
   } finally {
     await browser.close();
   }
