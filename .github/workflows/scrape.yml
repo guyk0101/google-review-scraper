@@ -44,9 +44,11 @@ jobs:
       - run: npm run scrape -- --url "${{ inputs.google_maps_url }}" --range "${{ inputs.range }}" --months "${{ inputs.months }}" --max-scrolls "${{ inputs.max_scrolls }}"
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: google-reviews-output
           path: |
             output/*.csv
             output/*.json
             output/*.png
+            output/*.html
