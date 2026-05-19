@@ -72,3 +72,5 @@ Open the `Scrape Google Reviews` workflow, click `Run workflow`, then enter:
 - `max_scrolls`: maximum scroll attempts.
 
 After the workflow finishes, download the `google-reviews-output` artifact.
+
+If Google limits Maps content on GitHub-hosted runners, the workflow will upload `failure-page.png` and `failure-page.html`. In that case, run the scraper locally or on a self-hosted runner with a regular browser session that can view the reviews.
