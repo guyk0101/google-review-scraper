@@ -42,6 +42,18 @@ Run with a visible browser for debugging:
 npm run scrape -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9" --headed
 ```
 
+Reuse a persistent browser profile so Google login/session state is kept:
+
+```bash
+npm run scrape -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9" --profile-dir ./chrome-profile --headed
+```
+
+On the first run, sign in to Google in the opened browser if Maps asks you to. Close the browser after the scraper finishes or after you finish signing in. Future runs can reuse the same profile:
+
+```bash
+npm run scrape -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9" --profile-dir ./chrome-profile
+```
+
 ## Options
 
 - `--url`: Google Maps URL. Required unless `GOOGLE_MAPS_URL` is set.
@@ -50,6 +62,7 @@ npm run scrape -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9" --headed
 - `--max-scrolls`: safety limit for scrolling the review feed. Default: `120`.
 - `--output-dir`: output directory. Default: `output`.
 - `--locale`: browser locale. Default: `zh-TW`.
+- `--profile-dir`: persistent Chromium profile directory for login/session state.
 - `--headed`: show Chromium while scraping.
 
 ## Output
@@ -74,3 +87,5 @@ Open the `Scrape Google Reviews` workflow, click `Run workflow`, then enter:
 After the workflow finishes, download the `google-reviews-output` artifact.
 
 If Google limits Maps content on GitHub-hosted runners, the workflow will upload `failure-page.png` and `failure-page.html`. In that case, run the scraper locally or on a self-hosted runner with a regular browser session that can view the reviews.
+
+Do not commit your `chrome-profile` directory. It can contain browser session data.
