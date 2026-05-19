@@ -2,6 +2,29 @@ name: Scrape Google Reviews
 
 on:
   workflow_dispatch:
+    inputs:
+      google_maps_url:
+        description: "Google Maps URL, for example https://maps.app.goo.gl/GgtVZdgwUUT2af6o9"
+        required: true
+        type: string
+      range:
+        description: "Review range to scrape"
+        required: true
+        default: "six-months"
+        type: choice
+        options:
+          - six-months
+          - all
+      months:
+        description: "Month window when range is six-months"
+        required: false
+        default: "6"
+        type: string
+      max_scrolls:
+        description: "Maximum review-feed scrolls"
+        required: false
+        default: "120"
+        type: string
 
 jobs:
   scrape:
@@ -14,16 +37,16 @@ jobs:
         with:
           node-version: 20
 
-      - run: npm install playwright
+      - run: npm install
 
       - run: npx playwright install --with-deps chromium
 
-      - run: node scrape.js
+      - run: npm run scrape -- --url "${{ inputs.google_maps_url }}" --range "${{ inputs.range }}" --months "${{ inputs.months }}" --max-scrolls "${{ inputs.max_scrolls }}"
 
       - uses: actions/upload-artifact@v4
         with:
           name: google-reviews-output
           path: |
-            *.csv
-            *.json
-            *.png
+            output/*.csv
+            output/*.json
+            output/*.png
