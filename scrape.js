@@ -230,12 +230,11 @@ async function openReviews(page) {
 
   const reviewSelectors = [
     'button[jsaction*="pane.reviewChart.moreReviews"]',
-    'button[aria-label*="評論"]',
-    'button[aria-label*="Reviews"]',
     '[role="tab"]:has-text("評論")',
     '[role="tab"]:has-text("Reviews")',
-    'button:has-text("評論")',
-    'button:has-text("Reviews")',
+    'button:has-text("篇評論")',
+    'button:has-text("則評論")',
+    'button:has-text("reviews")',
     'a:has-text("評論")',
     'a:has-text("Reviews")',
   ];
@@ -248,12 +247,37 @@ async function openReviews(page) {
         await page.locator(REVIEW_CARD_SELECTOR).first().waitFor({ timeout: 20000 });
         return;
       } catch (error) {
+        await closeWriteReviewDialog(page);
         console.log(`Could not open reviews with selector ${selector}: ${error.message}`);
       }
     }
   }
 
+  await throwIfContentRestricted(page);
   await page.locator(REVIEW_CARD_SELECTOR).first().waitFor({ timeout: 20000 });
+}
+
+async function closeWriteReviewDialog(page) {
+  const dialog = page.locator('iframe[aria-label*="撰寫評論"], iframe[aria-label*="Write a review"]');
+  if (!(await dialog.count())) {
+    return;
+  }
+
+  await page.keyboard.press("Escape").catch(() => {});
+  await page.waitForTimeout(1000);
+}
+
+async function throwIfContentRestricted(page) {
+  const restricted = await page
+    .getByText(/目前看到的 Google 地圖內容受限|Google Maps content is limited/i)
+    .count()
+    .catch(() => 0);
+
+  if (restricted > 0) {
+    throw new Error(
+      "Google Maps is limiting review content in this browser session. Run locally with a regular signed-in browser/session, or use a self-hosted runner with an allowed Google session."
+    );
+  }
 }
 
 async function sortNewest(page) {
