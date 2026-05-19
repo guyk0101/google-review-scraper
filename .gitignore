@@ -1,5 +1,6 @@
 node_modules/
 output/
+chrome-profile/
 reviews.json
 reviews.csv
 reviews-page.png
