@@ -1,6 +1,7 @@
 node_modules/
 output/
 output-*/
+jobs/
 chrome-profile/
 reviews.json
 reviews.csv

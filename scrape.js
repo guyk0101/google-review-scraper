@@ -804,6 +804,88 @@ async function collectReviewsWithRetry(page, options, cutoffDate) {
   throw lastError || new Error("No reviews were loaded from the reviews panel.");
 }
 
+async function extractPlaceName(page) {
+  const heading = await page
+    .locator("h1")
+    .first()
+    .innerText({ timeout: 3000 })
+    .catch(() => "");
+
+  if (heading.trim()) {
+    return heading.trim();
+  }
+
+  const title = await page.title().catch(() => "");
+  return title
+    .replace(/\s*-\s*Google\s*(地圖|Maps)\s*$/iu, "")
+    .replace(/\s*-\s*Google\s*$/iu, "")
+    .trim();
+}
+
+async function extractOverallRating(page, placeName = "") {
+  return page
+    .evaluate((name) => {
+      const parseRating = (value) => {
+        const match = String(value || "").match(/([1-5](?:[.,]\d)?)/);
+        return match ? Number(match[1].replace(",", ".")) : null;
+      };
+
+      const ariaCandidate = Array.from(document.querySelectorAll("[aria-label]"))
+        .map((element) => element.getAttribute("aria-label") || "")
+        .find((label) => /([1-5](?:[.,]\d)?)\s*(顆星|stars?)/i.test(label));
+      const ariaRating = parseRating(ariaCandidate);
+      if (Number.isFinite(ariaRating)) {
+        return ariaRating;
+      }
+
+      const h1 = document.querySelector("h1");
+      const containers = [];
+      let current = h1;
+      while (current && containers.length < 6) {
+        containers.push(current);
+        current = current.parentElement;
+      }
+      containers.push(document.body);
+
+      for (const container of containers) {
+        const lines = (container.innerText || "")
+          .split(/\n+/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+        const start = name ? Math.max(0, lines.findIndex((line) => line.includes(name))) : 0;
+        const nearby = lines.slice(start, start + 12);
+        const ratingLine = nearby.find((line) => /^[1-5](?:[.,]\d)?$/.test(line));
+        const rating = parseRating(ratingLine);
+        if (Number.isFinite(rating)) {
+          return rating;
+        }
+      }
+
+      return null;
+    }, placeName)
+    .catch(() => null);
+}
+
+function buildRatingComparison(overallRating, recentAverageRating) {
+  if (!Number.isFinite(overallRating) || !Number.isFinite(recentAverageRating)) {
+    return {
+      overallRating: Number.isFinite(overallRating) ? overallRating : null,
+      recentAverageRating: Number.isFinite(recentAverageRating) ? recentAverageRating : null,
+      difference: null,
+      direction: "unknown",
+    };
+  }
+
+  const difference = recentAverageRating - overallRating;
+  const direction = Math.abs(difference) < 0.05 ? "same" : difference > 0 ? "higher" : "lower";
+  return {
+    overallRating,
+    recentAverageRating,
+    difference,
+    direction,
+  };
+}
+
 function buildSummary(reviews) {
   const ratingCounts = {};
   for (const review of reviews) {
@@ -840,21 +922,27 @@ async function main() {
     await page.goto(options.url, { waitUntil: "domcontentloaded", timeout: 90000 });
     await waitForMapReady(page, options);
 
+    const placeName = await extractPlaceName(page);
+    const overallRating = await extractOverallRating(page, placeName);
     const loadedReviews = await collectReviewsWithRetry(page, options, cutoffDate);
     const filteredReviews =
       options.range === "six-months"
         ? loadedReviews.filter((review) => review.isWithinRange !== false)
         : loadedReviews;
+    const summary = buildSummary(filteredReviews);
 
     const metadata = {
       sourceUrl: options.url,
+      placeName,
+      overallRating,
       range: options.range,
       months: options.range === "six-months" ? options.months : null,
       cutoffDate: options.range === "six-months" ? dateToIsoDate(cutoffDate) : null,
       scrapedAt: new Date().toISOString(),
       reviewCount: filteredReviews.length,
       loadedReviewCount: loadedReviews.length,
-      summary: buildSummary(filteredReviews),
+      summary,
+      ratingComparison: buildRatingComparison(overallRating, summary.averageRating),
     };
 
     const jsonPath = path.join(outputDir, "reviews.json");
@@ -866,7 +954,10 @@ async function main() {
     await page.screenshot({ path: screenshotPath, fullPage: true });
 
     console.log(`Review count: ${filteredReviews.length}`);
+    console.log(`Place name: ${metadata.placeName || "n/a"}`);
+    console.log(`Overall rating: ${metadata.overallRating ?? "n/a"}`);
     console.log(`Average rating: ${metadata.summary.averageRating ?? "n/a"}`);
+    console.log(`Rating trend: ${metadata.ratingComparison.direction}`);
     console.log(`Wrote ${jsonPath}`);
     console.log(`Wrote ${csvPath}`);
     console.log(`Wrote ${screenshotPath}`);
@@ -900,4 +991,7 @@ module.exports = {
   parseReviewDate,
   normalizeReviews,
   buildSummary,
+  extractPlaceName,
+  extractOverallRating,
+  buildRatingComparison,
 };

@@ -106,6 +106,18 @@ Each review includes the author, rating, original date text, parsed date, date c
 
 `reviews.json` also includes a `metadata.summary` object with count, average rating, rating counts, and low-score review count.
 
+## Local Web App
+
+Run a local browser UI for creating review JSON files:
+
+```bash
+npm run web
+```
+
+Open `http://localhost:3000`, paste a Google Maps place URL, and start a job. Results are written under `jobs/<jobId>` and can be downloaded from the page as `reviews.json`.
+
+The web app uses the scraper with `--headless-compat --fast`, `zh-TW`, `Asia/Taipei`, and the local `./chrome-profile` by default.
+
 ## Completeness Check
 
 For a no-miss confidence check, run one conservative baseline and one faster candidate, then compare review IDs:

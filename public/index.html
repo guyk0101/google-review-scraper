@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Google Reviews JSON</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <h1>Google Reviews JSON</h1>
+            <p>輸入 Google Maps 店家網址，產生可送給模型分析的 reviews.json。</p>
+          </div>
+          <div class="status" id="status">Idle</div>
+        </header>
+
+        <form id="scrapeForm" class="form">
+          <label for="url">Google Maps 店家網址</label>
+          <textarea id="url" name="url" rows="4" autocomplete="off" required></textarea>
+
+          <div class="controls">
+            <label>
+              月數
+              <input id="months" name="months" type="number" min="1" max="24" value="6">
+            </label>
+            <label>
+              Max scrolls
+              <input id="maxScrolls" name="maxScrolls" type="number" min="1" max="300" value="120">
+            </label>
+            <button id="submitButton" type="submit">開始產生 JSON</button>
+          </div>
+        </form>
+
+        <section class="summary" aria-live="polite">
+          <div>
+            <span class="metric-label">Restaurant</span>
+            <strong id="placeName">-</strong>
+          </div>
+          <div>
+            <span class="metric-label">Review count</span>
+            <strong id="reviewCount">-</strong>
+          </div>
+          <div>
+            <span class="metric-label">Average</span>
+            <strong id="averageRating">-</strong>
+          </div>
+          <div>
+            <span class="metric-label">All-time rating</span>
+            <strong id="overallRating">-</strong>
+          </div>
+          <div>
+            <span class="metric-label">Recent trend</span>
+            <strong id="ratingTrend">-</strong>
+          </div>
+          <div>
+            <span class="metric-label">Low score</span>
+            <strong id="lowScoreCount">-</strong>
+          </div>
+        </section>
+
+        <div class="actions">
+          <a id="downloadJson" class="button disabled" href="#" aria-disabled="true">下載 reviews.json</a>
+          <button id="copyJson" type="button" disabled>複製 JSON</button>
+          <a id="openRaw" class="button disabled" href="#" target="_blank" rel="noreferrer" aria-disabled="true">開啟 raw JSON</a>
+        </div>
+
+        <section class="log-panel">
+          <div class="panel-header">
+            <h2>執行過程</h2>
+            <span id="jobId"></span>
+          </div>
+          <pre id="log"></pre>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

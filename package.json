@@ -5,11 +5,13 @@
   "main": "scrape.js",
   "scripts": {
     "scrape": "node scrape.js",
+    "web": "node server.js",
     "compare": "node compare-reviews.js",
     "verify-fast": "node verify-fast.js",
     "install:browsers": "playwright install chromium"
   },
   "dependencies": {
+    "express": "^5.2.1",
     "playwright": "^1.52.0"
   },
   "engines": {
