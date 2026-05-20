@@ -42,6 +42,13 @@ Run with a visible browser for debugging:
 npm run scrape -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9" --headed
 ```
 
+Use an installed Chrome or Edge if Playwright's bundled Chromium cannot be downloaded:
+
+```bash
+npm run scrape -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9" --browser-channel chrome
+npm run scrape -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9" --browser-channel msedge
+```
+
 Reuse a persistent browser profile so Google login/session state is kept:
 
 ```bash
@@ -54,6 +61,12 @@ On the first run, sign in to Google in the opened browser if Maps asks you to. C
 npm run scrape -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9" --profile-dir ./chrome-profile
 ```
 
+Run headless after the profile has been warmed up:
+
+```bash
+npm run scrape -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9" --browser-channel chrome --profile-dir ./chrome-profile --locale zh-TW --timezone Asia/Taipei --headless-compat --fast
+```
+
 ## Options
 
 - `--url`: Google Maps URL. Required unless `GOOGLE_MAPS_URL` is set.
@@ -61,8 +74,24 @@ npm run scrape -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9" --profile-di
 - `--months`: month window for `six-months`. Default: `6`.
 - `--max-scrolls`: safety limit for scrolling the review feed. Default: `120`.
 - `--output-dir`: output directory. Default: `output`.
+- `--review-retries`: reload and retry when reviews are empty or limited. Default: `1`.
+- `--page-settle-ms`: wait after page load before opening reviews. Default: `2000`.
+- `--wait-networkidle`: wait for network idle after page load/reload. Slower but conservative.
+- `--fast`: faster adaptive scrolling preset. Uses shorter page settle time and larger scroll steps.
+- `--scroll-delay-ms`: maximum adaptive wait after each review-feed scroll. Default: `2000`.
+- `--poll-interval-ms`: adaptive wait polling interval. Default: `100`.
+- `--stale-scroll-limit`: stop after this many scrolls with no new reviews. Default: `4`.
+- `--scroll-step-multiplier`: review-feed scroll distance multiplier. Default: `1.6`.
 - `--locale`: browser locale. Default: `zh-TW`.
+- `--timezone`: browser timezone, such as `Asia/Taipei`.
+- `--viewport-width`: browser viewport width. Default: `1440`.
+- `--viewport-height`: browser viewport height. Default: `1200`.
 - `--profile-dir`: persistent Chromium profile directory for login/session state.
+- `--browser-channel`: installed browser channel, such as `chrome` or `msedge`.
+- `--executable-path`: explicit Chrome/Edge executable path.
+- `--user-agent`: override browser user agent.
+- `--headless-compat`: reduce common headless/headed JavaScript fingerprint differences.
+- `--debug-hold-ms`: keep the browser open for this many milliseconds after an error.
 - `--headed`: show Chromium while scraping.
 
 ## Output
@@ -74,6 +103,28 @@ The scraper writes:
 - `output/reviews-page.png`: full-page screenshot for debugging.
 
 Each review includes the author, rating, original date text, parsed date, date confidence, review text, and raw captured text.
+
+`reviews.json` also includes a `metadata.summary` object with count, average rating, rating counts, and low-score review count.
+
+## Completeness Check
+
+For a no-miss confidence check, run one conservative baseline and one faster candidate, then compare review IDs:
+
+```bash
+npm run verify-fast -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9" --browser-channel chrome --profile-dir ./chrome-profile
+```
+
+The verification command writes `output-verify-fast/baseline` and `output-verify-fast/fast`, then exits with code `1` if adaptive fast missed any baseline reviews.
+
+You can also run the steps manually:
+
+```bash
+npm run scrape -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9" --browser-channel chrome --profile-dir ./chrome-profile --output-dir output-baseline --scroll-delay-ms 3000 --stale-scroll-limit 6
+npm run scrape -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9" --browser-channel chrome --profile-dir ./chrome-profile --output-dir output-fast --fast
+npm run compare -- output-baseline/reviews.json output-fast/reviews.json
+```
+
+If `Missing from candidate` is `0`, the faster run matched the baseline for the loaded review set.
 
 ## GitHub Actions
 

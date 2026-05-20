@@ -1,6 +1,9 @@
 name: Scrape Google Reviews
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       google_maps_url:
@@ -41,7 +44,28 @@ jobs:
 
       - run: npx playwright install --with-deps chromium
 
-      - run: npm run scrape -- --url "${{ inputs.google_maps_url }}" --range "${{ inputs.range }}" --months "${{ inputs.months }}" --max-scrolls "${{ inputs.max_scrolls }}"
+      - name: Scrape reviews
+        shell: bash
+        run: |
+          GOOGLE_MAPS_URL="${{ inputs.google_maps_url }}"
+          REVIEW_RANGE="${{ inputs.range }}"
+          REVIEW_MONTHS="${{ inputs.months }}"
+          MAX_SCROLLS="${{ inputs.max_scrolls }}"
+
+          GOOGLE_MAPS_URL="${GOOGLE_MAPS_URL:-https://www.google.com/maps/place/%E4%B8%89%E6%BC%AB%E9%A3%9F%E7%BE%A9+SANMAN+PASTA/@24.709788,120.900591,16z/data=!4m16!1m9!3m8!1s0x3469b300633ad63b:0xf675bcd284ab5d27!2z5p2R5a605a626I-c!8m2!3d24.6944857!4d120.8864945!9m1!1b1!16s%2Fg%2F11w9z28s8q!3m5!1s0x34684de4fa8e069f:0xcc12db4c8a90c668!8m2!3d24.709868!4d120.902425!16s%2Fg%2F11p49twdv5?entry=ttu}"
+          REVIEW_RANGE="${REVIEW_RANGE:-six-months}"
+          REVIEW_MONTHS="${REVIEW_MONTHS:-6}"
+          MAX_SCROLLS="${MAX_SCROLLS:-40}"
+
+          npm run scrape -- \
+            --url "$GOOGLE_MAPS_URL" \
+            --range "$REVIEW_RANGE" \
+            --months "$REVIEW_MONTHS" \
+            --max-scrolls "$MAX_SCROLLS" \
+            --locale zh-TW \
+            --timezone Asia/Taipei \
+            --headless-compat \
+            --fast
 
       - uses: actions/upload-artifact@v4
         if: always()

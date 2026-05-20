@@ -5,6 +5,8 @@
   "main": "scrape.js",
   "scripts": {
     "scrape": "node scrape.js",
+    "compare": "node compare-reviews.js",
+    "verify-fast": "node verify-fast.js",
     "install:browsers": "playwright install chromium"
   },
   "dependencies": {
