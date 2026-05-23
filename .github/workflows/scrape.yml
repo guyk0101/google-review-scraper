@@ -1,9 +1,6 @@
 name: Scrape Google Reviews
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       google_maps_url:
