@@ -67,6 +67,15 @@
           <a id="openRaw" class="button disabled" href="#" target="_blank" rel="noreferrer" aria-disabled="true">開啟 raw JSON</a>
         </div>
 
+        <section id="copyFallback" class="copy-fallback" hidden>
+          <div class="panel-header">
+            <h2>手動複製 JSON</h2>
+            <button id="closeCopyFallback" class="secondary-button" type="button">關閉</button>
+          </div>
+          <p>iPhone 可能會封鎖非 HTTPS 網頁的自動複製。長按下方內容，選擇全選後複製。</p>
+          <textarea id="jsonCopyText" readonly rows="10"></textarea>
+        </section>
+
         <section class="log-panel">
           <div class="panel-header">
             <h2>執行過程</h2>
