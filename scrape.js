@@ -2,7 +2,6 @@ const fs = require("fs");
 const path = require("path");
 
 const DEFAULT_LOCALE = "zh-TW";
-const DEFAULT_RANGE = "six-months";
 const DEFAULT_MAX_SCROLLS = 120;
 const DEFAULT_OUTPUT_DIR = "output";
 const DEFAULT_REVIEW_RETRIES = 1;
@@ -12,17 +11,23 @@ const DEFAULT_POLL_INTERVAL_MS = 100;
 const DEFAULT_STALE_SCROLL_LIMIT = 4;
 const DEFAULT_SCROLL_STEP_MULTIPLIER = 1.6;
 const REVIEW_CARD_SELECTOR = "div.jftiEf, div[data-review-id]";
+const PROFILE_LOCK_FILES = [
+  "SingletonCookie",
+  "SingletonLock",
+  "SingletonSocket",
+  "DevToolsActivePort",
+];
 
 function parseArgs(argv) {
   const options = {
     url: process.env.GOOGLE_MAPS_URL || "",
-    range: process.env.REVIEW_RANGE || DEFAULT_RANGE,
     months: Number(process.env.REVIEW_MONTHS || 6),
     maxScrolls: Number(process.env.MAX_SCROLLS || DEFAULT_MAX_SCROLLS),
     outputDir: process.env.OUTPUT_DIR || DEFAULT_OUTPUT_DIR,
     reviewRetries: Number(process.env.REVIEW_RETRIES || DEFAULT_REVIEW_RETRIES),
     pageSettleMs: Number(process.env.PAGE_SETTLE_MS || DEFAULT_PAGE_SETTLE_MS),
     scrollDelayMs: Number(process.env.SCROLL_DELAY_MS || DEFAULT_SCROLL_DELAY_MS),
+    loadWaitMode: process.env.LOAD_WAIT_MODE || "legacy",
     pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || DEFAULT_POLL_INTERVAL_MS),
     staleScrollLimit: Number(process.env.STALE_SCROLL_LIMIT || DEFAULT_STALE_SCROLL_LIMIT),
     scrollStepMultiplier: Number(process.env.SCROLL_STEP_MULTIPLIER || DEFAULT_SCROLL_STEP_MULTIPLIER),
@@ -36,6 +41,7 @@ function parseArgs(argv) {
     userAgent: process.env.USER_AGENT || "",
     headlessCompat: process.env.HEADLESS_COMPAT === "true",
     debugHoldMs: Number(process.env.DEBUG_HOLD_MS || 0),
+    debugArtifacts: process.env.DEBUG_ARTIFACTS === "true",
     waitNetworkIdle: process.env.WAIT_NETWORKIDLE === "true",
     headless: process.env.HEADLESS !== "false",
   };
@@ -46,9 +52,6 @@ function parseArgs(argv) {
 
     if (arg === "--url" && next) {
       options.url = next;
-      i += 1;
-    } else if (arg === "--range" && next) {
-      options.range = next;
       i += 1;
     } else if (arg === "--months" && next) {
       options.months = Number(next);
@@ -67,6 +70,9 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--scroll-delay-ms" && next) {
       options.scrollDelayMs = Number(next);
+      i += 1;
+    } else if (arg === "--load-wait-mode" && next) {
+      options.loadWaitMode = next;
       i += 1;
     } else if (arg === "--poll-interval-ms" && next) {
       options.pollIntervalMs = Number(next);
@@ -106,6 +112,8 @@ function parseArgs(argv) {
     } else if (arg === "--debug-hold-ms" && next) {
       options.debugHoldMs = Number(next);
       i += 1;
+    } else if (arg === "--debug-artifacts") {
+      options.debugArtifacts = true;
     } else if (arg === "--headed") {
       options.headless = false;
     } else if (arg === "--wait-networkidle") {
@@ -126,10 +134,6 @@ function parseArgs(argv) {
     throw new Error("Missing --url. Example: node scrape.js --url https://maps.app.goo.gl/...");
   }
 
-  if (!["six-months", "all"].includes(options.range)) {
-    throw new Error('--range must be "six-months" or "all"');
-  }
-
   if (!Number.isFinite(options.months) || options.months <= 0) {
     throw new Error("--months must be a positive number");
   }
@@ -148,6 +152,10 @@ function parseArgs(argv) {
 
   if (!Number.isFinite(options.scrollDelayMs) || options.scrollDelayMs < 0) {
     throw new Error("--scroll-delay-ms must be zero or a positive number");
+  }
+
+  if (!["legacy", "stable"].includes(options.loadWaitMode)) {
+    throw new Error("--load-wait-mode must be legacy or stable");
   }
 
   if (!Number.isFinite(options.pollIntervalMs) || options.pollIntervalMs <= 0) {
@@ -179,14 +187,14 @@ Usage:
   node scrape.js --url <google-maps-url> [options]
 
 Options:
-  --range six-months|all    Scrape recent months or every loaded review. Default: six-months
-  --months <number>         Month window for --range six-months. Default: 6
+  --months <number>         Recent-review window in months. Default: 6
   --max-scrolls <number>    Safety limit for review-feed scrolling. Default: 120
-  --output-dir <path>       Directory for reviews.json, reviews.csv, and screenshot
+  --output-dir <path>       Directory for reviews.json and optional debug artifacts
   --review-retries <number> Reload and retry when reviews are empty/limited. Default: 1
   --page-settle-ms <number> Wait after page load before opening reviews. Default: 2000
   --wait-networkidle        Wait for network idle after page load/reload
   --scroll-delay-ms <number> Max adaptive wait after each scroll. Default: 2000
+  --load-wait-mode <mode>   Wait mode after scrolling: legacy or stable. Default: legacy
   --poll-interval-ms <number> Adaptive wait polling interval. Default: 100
   --stale-scroll-limit <n>  Stop after this many unchanged scrolls. Default: 4
   --scroll-step-multiplier <n> Scroll distance multiplier. Default: 1.6
@@ -201,6 +209,7 @@ Options:
   --user-agent <string>     Override browser user agent
   --headless-compat         Reduce common headless/headed JS fingerprint differences
   --debug-hold-ms <number>  Keep the browser open for this many ms after an error
+  --debug-artifacts         Also write reviews.csv and reviews-page.png on success
   --headed                  Show Chromium while scraping
 `);
 }
@@ -237,6 +246,7 @@ async function launchBrowser(chromium, options) {
   if (options.profileDir) {
     const profileDir = path.resolve(options.profileDir);
     fs.mkdirSync(profileDir, { recursive: true });
+    clearProfileLocks(profileDir);
     console.log(`Using persistent profile: ${profileDir}`);
 
     const context = await chromium.launchPersistentContext(profileDir, {
@@ -253,6 +263,19 @@ async function launchBrowser(chromium, options) {
   await applyHeadlessCompat(context, options);
   const page = await context.newPage();
   return { page, close: () => browser.close() };
+}
+
+function clearProfileLocks(profileDir) {
+  for (const fileName of PROFILE_LOCK_FILES) {
+    const filePath = path.join(profileDir, fileName);
+    try {
+      fs.rmSync(filePath, { force: true, recursive: true });
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        console.warn(`Could not remove stale profile lock ${fileName}: ${error.message}`);
+      }
+    }
+  }
 }
 
 function defaultChromeUserAgent() {
@@ -409,33 +432,43 @@ function escapeCsv(value) {
 function writeCsv(filePath, reviews) {
   const headers = [
     "index",
-    "id",
     "author",
     "rating",
     "ratingLabel",
+    "likeCount",
     "dateText",
     "date",
     "dateConfidence",
     "isWithinRange",
     "text",
-    "raw",
   ];
 
   const rows = reviews.map((review, index) => [
     index + 1,
-    review.id,
     review.author,
     review.rating,
     review.ratingLabel,
+    review.likeCount,
     review.dateText,
     review.date,
     review.dateConfidence,
     review.isWithinRange,
     review.text,
-    review.raw,
   ]);
 
   fs.writeFileSync(filePath, [headers, ...rows].map((row) => row.map(escapeCsv).join(",")).join("\n"));
+}
+
+function compactReviewText(value) {
+  return String(value ?? "")
+    .replace(/\\[rn]/g, " ")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function stripInternalReviewFields(reviews) {
+  return reviews.map(({ id: _id, raw: _raw, ...review }) => review);
 }
 
 async function dismissGoogleOverlays(page) {
@@ -599,22 +632,61 @@ async function extractReviews(page) {
         textOf(".MyEned") ||
         textOf('[data-expandable-section]') ||
         "";
+      const rawText = node.innerText || "";
 
       return {
         id: node.getAttribute("data-review-id") || "",
         author,
         rating: ratingMatch ? Number(ratingMatch[1]) : null,
         ratingLabel,
+        likeCount: extractLikeCount(node),
         dateText,
         text: cleanupReviewText(reviewText),
-        raw: node.innerText || "",
+        raw: cleanupReviewText(rawText),
       };
     });
+
+    function extractLikeCount(node) {
+      const candidates = [
+        ...Array.from(node.querySelectorAll("[aria-label]")).map(
+          (element) => element.getAttribute("aria-label") || ""
+        ),
+        ...Array.from(node.querySelectorAll("button")).map((button) => button.textContent || ""),
+        node.innerText || "",
+      ];
+
+      for (const text of candidates) {
+        const value = parseLikeCount(text);
+        if (value !== null) {
+          return value;
+        }
+      }
+
+      return null;
+    }
+
+    function parseLikeCount(value) {
+      const text = String(value || "").trim();
+      const match =
+        text.match(/(?:有\s*)?([\d,]+)\s*(?:人)?(?:覺得|認為)?.{0,16}(?:實用|有幫助|按讚|喜歡|讚|like[s]?|helpful)/i) ||
+        text.match(/(?:實用|有幫助|按讚|喜歡|讚|like[s]?|helpful).{0,16}([\d,]+)/i) ||
+        text.match(/([\d,]+).{0,16}(?:實用|有幫助|按讚|喜歡|讚|like[s]?|helpful)/i);
+
+      if (!match) {
+        return null;
+      }
+
+      const count = Number(match[1].replace(/,/g, ""));
+      return Number.isFinite(count) ? count : null;
+    }
 
     function cleanupReviewText(value) {
       return String(value || "")
         .replace(/\n(餐點類型|餐點：|服務：|氣氛：|平均每人消費金額|建議的餐點|停車位|停車選項|訂單類型)[\s\S]*$/u, "")
         .replace(/\n(更多|More)$/iu, "")
+        .replace(/\\[rn]/g, " ")
+        .replace(/[\r\n\t]+/g, " ")
+        .replace(/\s{2,}/g, " ")
         .trim();
     }
   });
@@ -670,7 +742,117 @@ async function getReviewCardCount(page) {
     .catch(() => 0);
 }
 
-async function waitForReviewGrowth(page, previousCardCount, options) {
+async function getReviewFeedState(page) {
+  return page
+    .evaluate((reviewSelector) => {
+      const cardCount = document.querySelectorAll(reviewSelector).length;
+      const firstReview = document.querySelector(reviewSelector);
+      const candidates = [];
+
+      if (firstReview) {
+        let current = firstReview.parentElement;
+        while (current && current !== document.body) {
+          candidates.push(current);
+          current = current.parentElement;
+        }
+      }
+
+      candidates.push(...Array.from(document.querySelectorAll("div")));
+
+      const scroller = candidates
+        .filter((element) => {
+          const style = window.getComputedStyle(element);
+          return (
+            element.scrollHeight > element.clientHeight + 100 &&
+            element.clientHeight > 250 &&
+            !["hidden", "clip"].includes(style.overflowY)
+          );
+        })
+        .sort((a, b) => b.scrollHeight - a.scrollHeight)[0];
+
+      if (!scroller) {
+        return {
+          cardCount,
+          scrollTop: window.scrollY,
+          scrollHeight: document.documentElement.scrollHeight,
+          clientHeight: window.innerHeight,
+          bottomGap: document.documentElement.scrollHeight - window.scrollY - window.innerHeight,
+        };
+      }
+
+      return {
+        cardCount,
+        scrollTop: scroller.scrollTop,
+        scrollHeight: scroller.scrollHeight,
+        clientHeight: scroller.clientHeight,
+        bottomGap: scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight,
+      };
+    }, REVIEW_CARD_SELECTOR)
+    .catch(() => ({
+      cardCount: 0,
+      scrollTop: 0,
+      scrollHeight: 0,
+      clientHeight: 0,
+      bottomGap: 0,
+    }));
+}
+
+function hasReviewCardGrown(previous, current) {
+  return current.cardCount > previous.cardCount;
+}
+
+function hasFeedLayoutChanged(previous, current) {
+  return (
+    current.cardCount !== previous.cardCount ||
+    Math.abs(current.scrollHeight - previous.scrollHeight) > 20 ||
+    Math.abs(current.scrollTop - previous.scrollTop) > 20
+  );
+}
+
+function isSameFeedState(a, b) {
+  return (
+    a.cardCount === b.cardCount &&
+    Math.abs(a.scrollHeight - b.scrollHeight) <= 2 &&
+    Math.abs(a.scrollTop - b.scrollTop) <= 2
+  );
+}
+
+async function waitForReviewLoadAfterScroll(page, previousState, options) {
+  if (options.scrollDelayMs <= 0) {
+    return { loaded: false, state: await getReviewFeedState(page) };
+  }
+
+  const deadline = Date.now() + options.scrollDelayMs;
+  const stableMs = Math.min(700, Math.max(250, options.pollIntervalMs * 4));
+  let sawGrowth = false;
+  let stableSince = 0;
+  let lastState = previousState;
+
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(options.pollIntervalMs);
+    const currentState = await getReviewFeedState(page);
+
+    if (hasReviewCardGrown(previousState, currentState)) {
+      sawGrowth = true;
+    }
+
+    if (sawGrowth && isSameFeedState(lastState, currentState)) {
+      if (!stableSince) {
+        stableSince = Date.now();
+      } else if (Date.now() - stableSince >= stableMs) {
+        return { loaded: true, state: currentState };
+      }
+    } else if (hasFeedLayoutChanged(lastState, currentState)) {
+      stableSince = 0;
+    }
+
+    lastState = currentState;
+  }
+
+  return { loaded: sawGrowth, state: lastState };
+}
+
+async function waitForReviewGrowthLegacy(page, previousCardCount, options) {
   if (options.scrollDelayMs <= 0) {
     return false;
   }
@@ -695,6 +877,11 @@ function normalizeReviews(reviews, cutoffDate, now = new Date()) {
       const parsedDate = parseReviewDate(review.dateText, now);
       return {
         ...review,
+        author: compactReviewText(review.author),
+        ratingLabel: compactReviewText(review.ratingLabel),
+        dateText: compactReviewText(review.dateText),
+        text: compactReviewText(review.text),
+        raw: compactReviewText(review.raw),
         date: dateToIsoDate(parsedDate.date),
         dateConfidence: parsedDate.confidence,
         isWithinRange: parsedDate.date ? parsedDate.date >= cutoffDate : null,
@@ -734,10 +921,11 @@ async function scrollReviews(page, options, cutoffDate) {
   for (let i = 0; i < options.maxScrolls; i += 1) {
     const extracted = await extractReviews(page);
     const currentCardCount = extracted.length;
+    const previousFeedState = await getReviewFeedState(page);
     normalized = normalizeReviews(extracted, cutoffDate);
     console.log(`Scroll ${i + 1}/${options.maxScrolls}: ${normalized.length} reviews loaded`);
 
-    if (options.range === "six-months" && shouldStopForRange(normalized, cutoffDate)) {
+    if (shouldStopForRange(normalized, cutoffDate)) {
       console.log("Reached reviews older than the requested window.");
       return normalized;
     }
@@ -756,7 +944,17 @@ async function scrollReviews(page, options, cutoffDate) {
     }
 
     await scrollReviewContainer(page, options);
-    await waitForReviewGrowth(page, currentCardCount, options);
+    if (options.loadWaitMode === "legacy") {
+      const loaded = await waitForReviewGrowthLegacy(page, currentCardCount, options);
+      if (!loaded) {
+        console.log("No new review batch detected after this scroll.");
+      }
+    } else {
+      const waitResult = await waitForReviewLoadAfterScroll(page, previousFeedState, options);
+      if (!waitResult.loaded) {
+        console.log("No new review batch detected after this scroll.");
+      }
+    }
   }
 
   return normalizeReviews(await extractReviews(page), cutoffDate);
@@ -802,6 +1000,22 @@ async function collectReviewsWithRetry(page, options, cutoffDate) {
   }
 
   throw lastError || new Error("No reviews were loaded from the reviews panel.");
+}
+
+async function closeBrowserSession(browserSession, timeoutMs = 10000) {
+  let timeout;
+  try {
+    await Promise.race([
+      browserSession.close(),
+      new Promise((resolve) => {
+        timeout = setTimeout(resolve, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 async function extractPlaceName(page) {
@@ -925,19 +1139,15 @@ async function main() {
     const placeName = await extractPlaceName(page);
     const overallRating = await extractOverallRating(page, placeName);
     const loadedReviews = await collectReviewsWithRetry(page, options, cutoffDate);
-    const filteredReviews =
-      options.range === "six-months"
-        ? loadedReviews.filter((review) => review.isWithinRange !== false)
-        : loadedReviews;
+    const filteredReviews = loadedReviews.filter((review) => review.isWithinRange !== false);
     const summary = buildSummary(filteredReviews);
 
     const metadata = {
       sourceUrl: options.url,
       placeName,
       overallRating,
-      range: options.range,
-      months: options.range === "six-months" ? options.months : null,
-      cutoffDate: options.range === "six-months" ? dateToIsoDate(cutoffDate) : null,
+      months: options.months,
+      cutoffDate: dateToIsoDate(cutoffDate),
       scrapedAt: new Date().toISOString(),
       reviewCount: filteredReviews.length,
       loadedReviewCount: loadedReviews.length,
@@ -946,12 +1156,18 @@ async function main() {
     };
 
     const jsonPath = path.join(outputDir, "reviews.json");
-    const csvPath = path.join(outputDir, "reviews.csv");
-    const screenshotPath = path.join(outputDir, "reviews-page.png");
+    const outputReviews = stripInternalReviewFields(filteredReviews);
 
-    fs.writeFileSync(jsonPath, JSON.stringify({ metadata, reviews: filteredReviews }, null, 2));
-    writeCsv(csvPath, filteredReviews);
-    await page.screenshot({ path: screenshotPath, fullPage: true });
+    fs.writeFileSync(jsonPath, JSON.stringify({ metadata, reviews: outputReviews }, null, 2));
+
+    if (options.debugArtifacts) {
+      const csvPath = path.join(outputDir, "reviews.csv");
+      const screenshotPath = path.join(outputDir, "reviews-page.png");
+      writeCsv(csvPath, outputReviews);
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+      console.log(`Wrote ${csvPath}`);
+      console.log(`Wrote ${screenshotPath}`);
+    }
 
     console.log(`Review count: ${filteredReviews.length}`);
     console.log(`Place name: ${metadata.placeName || "n/a"}`);
@@ -959,8 +1175,6 @@ async function main() {
     console.log(`Average rating: ${metadata.summary.averageRating ?? "n/a"}`);
     console.log(`Rating trend: ${metadata.ratingComparison.direction}`);
     console.log(`Wrote ${jsonPath}`);
-    console.log(`Wrote ${csvPath}`);
-    console.log(`Wrote ${screenshotPath}`);
   } catch (error) {
     const failureScreenshotPath = path.join(outputDir, "failure-page.png");
     const failureHtmlPath = path.join(outputDir, "failure-page.html");
@@ -976,7 +1190,7 @@ async function main() {
     }
     throw error;
   } finally {
-    await browserSession.close();
+    await closeBrowserSession(browserSession);
   }
 }
 
