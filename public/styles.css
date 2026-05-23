@@ -80,7 +80,8 @@ p {
 
 .form,
 .summary,
-.log-panel {
+.log-panel,
+.copy-fallback {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -153,6 +154,18 @@ button:disabled,
   cursor: not-allowed;
 }
 
+.secondary-button {
+  height: 34px;
+  border-color: var(--line);
+  background: #fff;
+  color: var(--text);
+}
+
+.secondary-button:hover {
+  border-color: var(--accent);
+  background: #eef8f6;
+}
+
 .summary {
   display: grid;
   grid-template-columns: 1.4fr repeat(5, 1fr);
@@ -203,6 +216,26 @@ pre {
   font-size: 13px;
   line-height: 1.45;
   white-space: pre-wrap;
+}
+
+.copy-fallback {
+  display: grid;
+  gap: 12px;
+}
+
+.copy-fallback[hidden] {
+  display: none;
+}
+
+.copy-fallback p {
+  margin-top: 0;
+}
+
+#jsonCopyText {
+  min-height: 220px;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 @media (max-width: 760px) {
