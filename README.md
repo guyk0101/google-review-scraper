@@ -1,6 +1,6 @@
 # google-review-scraper
 
-Google Maps review scraper built with Playwright. Give it a Google Maps URL and choose whether to collect reviews from the most recent six months or all loaded reviews.
+Google Maps review scraper built with Playwright. Give it a Google Maps URL and choose how many recent months of reviews to collect.
 
 > Use this only for data you are allowed to collect. Google Maps pages can change, throttle automation, or require manual adjustments over time.
 
@@ -24,16 +24,10 @@ Scrape reviews from the most recent six months:
 npm run scrape -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9"
 ```
 
-Scrape all reviews that can be loaded before the scroll limit:
-
-```bash
-npm run scrape -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9" --range all
-```
-
 Customize the recent review window:
 
 ```bash
-npm run scrape -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9" --range six-months --months 3
+npm run scrape -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9" --months 3
 ```
 
 Run with a visible browser for debugging:
@@ -70,8 +64,7 @@ npm run scrape -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9" --browser-ch
 ## Options
 
 - `--url`: Google Maps URL. Required unless `GOOGLE_MAPS_URL` is set.
-- `--range`: `six-months` or `all`. Default: `six-months`.
-- `--months`: month window for `six-months`. Default: `6`.
+- `--months`: recent-review window in months. Default: `6`.
 - `--max-scrolls`: safety limit for scrolling the review feed. Default: `120`.
 - `--output-dir`: output directory. Default: `output`.
 - `--review-retries`: reload and retry when reviews are empty or limited. Default: `1`.
@@ -92,6 +85,7 @@ npm run scrape -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9" --browser-ch
 - `--user-agent`: override browser user agent.
 - `--headless-compat`: reduce common headless/headed JavaScript fingerprint differences.
 - `--debug-hold-ms`: keep the browser open for this many milliseconds after an error.
+- `--debug-artifacts`: also write `reviews.csv` and `reviews-page.png` on success.
 - `--headed`: show Chromium while scraping.
 
 ## Output
@@ -99,10 +93,15 @@ npm run scrape -- --url "https://maps.app.goo.gl/GgtVZdgwUUT2af6o9" --browser-ch
 The scraper writes:
 
 - `output/reviews.json`: metadata and structured reviews.
-- `output/reviews.csv`: CSV export.
-- `output/reviews-page.png`: full-page screenshot for debugging.
 
-Each review includes the author, rating, original date text, parsed date, date confidence, review text, and raw captured text.
+With `--debug-artifacts`, it also writes:
+
+- `output/reviews.csv`: CSV export.
+- `output/reviews-page.png`: full-page screenshot for debugging successful runs.
+
+On failures, it still writes `failure-page.png` and `failure-page.html` when possible so browser/session issues can be diagnosed.
+
+Each review includes the author, rating, original date text, parsed date, date confidence, review text, and `likeCount` when a visible like count can be parsed.
 
 `reviews.json` also includes a `metadata.summary` object with count, average rating, rating counts, and low-score review count.
 
@@ -117,6 +116,52 @@ npm run web
 Open `http://localhost:3000`, paste a Google Maps place URL, and start a job. Results are written under `jobs/<jobId>` and can be downloaded from the page as `reviews.json`.
 
 The web app uses the scraper with `--headless-compat --fast`, `zh-TW`, `Asia/Taipei`, and the local `./chrome-profile` by default.
+
+## MCP Server
+
+Run a Streamable HTTP MCP server so ChatGPT or another MCP client can call the scraper directly:
+
+```bash
+MCP_SHARED_SECRET="replace-with-a-long-random-secret" npm run mcp
+```
+
+The server listens on `http://127.0.0.1:8787/mcp` by default. It exposes one prompt and two tools.
+
+Prompt:
+
+- `google_restaurant_review_analysis_zh_tw`: Traditional Chinese restaurant review analysis prompt. It defaults to the most recent 8 months and formats the answer with low-score ratio, key negative reasons, positives, risks, and conclusion.
+
+Tools:
+
+- `start_google_reviews_scrape`: starts a background scrape and returns a `jobId`. It does not return reviews. If the same `url`/`months`/`maxScrolls` job is already queued, running, or recently finished, it returns the existing `jobId` instead of starting a duplicate.
+- `get_google_reviews_scrape_result`: polls a `jobId`. Call it only after waiting 10 seconds after starting or after a previous `queued`/`running` response. If it returns `queued` or `running`, do not call `start_google_reviews_scrape` again; wait 10 seconds and poll the same `jobId`. When it returns `done`, it includes `metadata`, `reviews`, and a compact `summary`.
+
+The MCP tools always use the recent-months window, so `months` is the only time-range control. The default is `months: 8` and `maxScrolls: 120`. Large places can take several minutes in the background.
+
+Authentication:
+
+- Preferred: send `Authorization: Bearer <MCP_SHARED_SECRET>` to `/mcp`.
+- Personal testing fallback: use `/mcp/<MCP_SHARED_SECRET>` if the client cannot send an Authorization header.
+- If `MCP_SHARED_SECRET` is not set, the MCP endpoint is unauthenticated. Do not expose it publicly in that mode.
+
+Useful environment variables:
+
+- `MCP_PORT`: MCP server port. Default: `8787`.
+- `MCP_HOST`: MCP listen host. Default: `127.0.0.1`.
+- `MCP_ALLOWED_HOSTS`: comma-separated hostnames accepted by the MCP SDK host-header guard. Default: `localhost,127.0.0.1,imac.tail716865.ts.net`.
+- `MCP_SHARED_SECRET`: shared secret for MCP requests.
+- `SCRAPE_TIMEOUT_MS`: scraper timeout per MCP call. Default: `300000` (5 minutes).
+- `MCP_KEEP_JOB_FILES`: set to `true` to keep MCP job directories on disk. Default is unset/false, so successful MCP jobs are loaded into memory and their `mcp-jobs/<jobId>` files are deleted.
+- `BROWSER_CHANNEL`, `PROFILE_DIR`, `LOCALE`, `TIMEZONE`, `HEADLESS`: forwarded to the scraper.
+
+Expose with Tailscale Funnel for a personal HTTPS endpoint:
+
+```bash
+MCP_SHARED_SECRET="replace-with-a-long-random-secret" npm run mcp
+tailscale funnel --bg --https=443 http://127.0.0.1:8787
+```
+
+Use the resulting Funnel URL as the MCP server URL. Prefer the bearer-token form if the client supports it; otherwise use the long secret path form only for private testing.
 
 ## Completeness Check
 
@@ -143,8 +188,7 @@ If `Missing from candidate` is `0`, the faster run matched the baseline for the 
 Open the `Scrape Google Reviews` workflow, click `Run workflow`, then enter:
 
 - `google_maps_url`: target Google Maps URL.
-- `range`: `six-months` or `all`.
-- `months`: month window when using `six-months`.
+- `months`: recent-review window in months.
 - `max_scrolls`: maximum scroll attempts.
 
 After the workflow finishes, download the `google-reviews-output` artifact.
