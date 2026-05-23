@@ -11,6 +11,7 @@ const SCRAPE_SCRIPT = path.join(__dirname, "scrape.js");
 const PUBLIC_DIR = path.join(__dirname, "public");
 
 const jobs = new Map();
+let scrapeQueue = Promise.resolve();
 
 fs.mkdirSync(JOBS_DIR, { recursive: true });
 
@@ -59,7 +60,7 @@ app.post("/api/scrape", (req, res) => {
   };
 
   jobs.set(id, job);
-  runScrape(job);
+  enqueueScrape(job);
   res.status(202).json(publicJob(job));
 });
 
@@ -101,6 +102,12 @@ app.get("/api/jobs/:id/raw", (req, res) => {
   res.type("application/json").send(fs.readFileSync(jsonPath, "utf8"));
 });
 
+function enqueueScrape(job) {
+  const run = scrapeQueue.then(() => runScrape(job));
+  scrapeQueue = run.catch(() => {});
+  return run;
+}
+
 function runScrape(job) {
   job.status = "running";
   job.startedAt = new Date().toISOString();
@@ -109,8 +116,6 @@ function runScrape(job) {
     SCRAPE_SCRIPT,
     "--url",
     job.url,
-    "--range",
-    "six-months",
     "--months",
     String(job.months),
     "--max-scrolls",
@@ -127,6 +132,16 @@ function runScrape(job) {
     process.env.TIMEZONE || "Asia/Taipei",
     "--headless-compat",
     "--fast",
+    "--review-retries",
+    "1",
+    "--scroll-delay-ms",
+    "1800",
+    "--poll-interval-ms",
+    "80",
+    "--stale-scroll-limit",
+    "6",
+    "--scroll-step-multiplier",
+    "2.2",
   ];
 
   const child = spawn(process.execPath, args, {
@@ -140,20 +155,24 @@ function runScrape(job) {
   child.stdout.on("data", (chunk) => appendLog(job, chunk));
   child.stderr.on("data", (chunk) => appendLog(job, chunk));
 
-  child.on("error", (error) => {
-    job.status = "failed";
-    job.error = error.message;
-    job.finishedAt = new Date().toISOString();
-  });
+  return new Promise((resolve) => {
+    child.on("error", (error) => {
+      job.status = "failed";
+      job.error = error.message;
+      job.finishedAt = new Date().toISOString();
+      resolve();
+    });
 
-  child.on("close", (code) => {
-    job.exitCode = code;
-    job.finishedAt = new Date().toISOString();
-    refreshJobSummary(job);
-    job.status = code === 0 ? "done" : "failed";
-    if (code !== 0 && !job.error) {
-      job.error = `Scraper exited with code ${code}.`;
-    }
+    child.on("close", (code) => {
+      job.exitCode = code;
+      job.finishedAt = new Date().toISOString();
+      refreshJobSummary(job);
+      job.status = code === 0 ? "done" : "failed";
+      if (code !== 0 && !job.error) {
+        job.error = `Scraper exited with code ${code}.`;
+      }
+      resolve();
+    });
   });
 }
 
