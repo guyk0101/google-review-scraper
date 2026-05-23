@@ -1,10 +1,14 @@
 const form = document.getElementById("scrapeForm");
+const urlInput = document.getElementById("url");
 const statusEl = document.getElementById("status");
 const logEl = document.getElementById("log");
 const submitButton = document.getElementById("submitButton");
 const downloadJson = document.getElementById("downloadJson");
 const openRaw = document.getElementById("openRaw");
 const copyJson = document.getElementById("copyJson");
+const copyFallback = document.getElementById("copyFallback");
+const closeCopyFallback = document.getElementById("closeCopyFallback");
+const jsonCopyText = document.getElementById("jsonCopyText");
 const jobIdEl = document.getElementById("jobId");
 const placeName = document.getElementById("placeName");
 const reviewCount = document.getElementById("reviewCount");
@@ -22,7 +26,7 @@ form.addEventListener("submit", async (event) => {
   resetResult();
 
   const payload = {
-    url: document.getElementById("url").value.trim(),
+    url: urlInput.value.trim(),
     months: Number(document.getElementById("months").value || 6),
     maxScrolls: Number(document.getElementById("maxScrolls").value || 120),
   };
@@ -58,13 +62,37 @@ copyJson.addEventListener("click", async () => {
     return;
   }
 
-  const response = await fetch(currentJob.rawJsonUrl);
-  const text = await response.text();
-  await navigator.clipboard.writeText(text);
-  copyJson.textContent = "已複製";
-  setTimeout(() => {
-    copyJson.textContent = "複製 JSON";
-  }, 1400);
+  copyJson.disabled = true;
+  const originalLabel = copyJson.textContent;
+
+  try {
+    const response = await fetch(currentJob.rawJsonUrl);
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error("JSON is not ready.");
+    }
+
+    await copyText(text);
+    copyFallback.hidden = true;
+    copyJson.textContent = "已複製";
+  } catch (error) {
+    if (error.name !== "NotAllowedError" && error.name !== "SecurityError") {
+      console.warn(error);
+    }
+    const response = await fetch(currentJob.rawJsonUrl);
+    const text = await response.text();
+    showCopyFallback(text);
+    copyJson.textContent = "手動複製";
+  } finally {
+    setTimeout(() => {
+      copyJson.textContent = originalLabel;
+      copyJson.disabled = false;
+    }, 1400);
+  }
+});
+
+closeCopyFallback.addEventListener("click", () => {
+  copyFallback.hidden = true;
 });
 
 async function pollJob(id) {
@@ -80,6 +108,10 @@ async function pollJob(id) {
   if (data.status === "done" || data.status === "failed") {
     clearInterval(pollTimer);
     submitButton.disabled = false;
+  }
+
+  if (data.status === "done") {
+    urlInput.value = "";
   }
 }
 
@@ -124,6 +156,21 @@ function enableLink(link, href) {
   link.setAttribute("aria-disabled", "false");
 }
 
+async function copyText(text) {
+  if (!window.isSecureContext || !navigator.clipboard?.writeText) {
+    throw new DOMException("Clipboard is unavailable on this connection.", "SecurityError");
+  }
+
+  await navigator.clipboard.writeText(text);
+}
+
+function showCopyFallback(text) {
+  jsonCopyText.value = text;
+  copyFallback.hidden = false;
+  jsonCopyText.focus();
+  jsonCopyText.setSelectionRange(0, jsonCopyText.value.length);
+}
+
 function formatTrend(comparison) {
   if (!comparison || comparison.direction === "unknown") {
     return "-";
@@ -155,5 +202,7 @@ function resetResult() {
   openRaw.classList.add("disabled");
   downloadJson.setAttribute("aria-disabled", "true");
   openRaw.setAttribute("aria-disabled", "true");
+  copyFallback.hidden = true;
+  jsonCopyText.value = "";
   jobIdEl.textContent = "";
 }
