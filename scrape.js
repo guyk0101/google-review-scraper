@@ -17,6 +17,19 @@ const PROFILE_LOCK_FILES = [
   "SingletonSocket",
   "DevToolsActivePort",
 ];
+const PROFILE_CACHE_PATHS = [
+  "Default/Cache",
+  "Default/Code Cache",
+  "Default/GPUCache",
+  "Default/DawnGraphiteCache",
+  "Default/DawnWebGPUCache",
+  "Default/ShaderCache",
+  "Default/GrShaderCache",
+  "Default/GraphiteDawnCache",
+  "GrShaderCache",
+  "ShaderCache",
+  "GraphiteDawnCache",
+];
 
 function parseArgs(argv) {
   const options = {
@@ -44,6 +57,7 @@ function parseArgs(argv) {
     debugArtifacts: process.env.DEBUG_ARTIFACTS === "true",
     waitNetworkIdle: process.env.WAIT_NETWORKIDLE === "true",
     headless: process.env.HEADLESS !== "false",
+    cleanupProfileCache: process.env.CLEAN_PROFILE_CACHE !== "false",
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -116,6 +130,8 @@ function parseArgs(argv) {
       options.debugArtifacts = true;
     } else if (arg === "--headed") {
       options.headless = false;
+    } else if (arg === "--keep-profile-cache") {
+      options.cleanupProfileCache = false;
     } else if (arg === "--wait-networkidle") {
       options.waitNetworkIdle = true;
     } else if (arg === "--fast") {
@@ -204,6 +220,7 @@ Options:
   --viewport-width <number> Browser viewport width. Default: 1440
   --viewport-height <number> Browser viewport height. Default: 1200
   --profile-dir <path>      Reuse a persistent Chromium profile for login/session state
+  --keep-profile-cache      Keep browser cache after scraping. By default cache is cleaned while cookies/session are preserved
   --browser-channel <name>  Use an installed browser channel, e.g. chrome or msedge
   --executable-path <path>  Use a specific Chrome/Edge executable path
   --user-agent <string>     Override browser user agent
@@ -611,13 +628,7 @@ async function extractReviews(page) {
         node.getAttribute("aria-label") ||
         "";
 
-      const ratingElement =
-        node.querySelector('[role="img"][aria-label*="顆星"]') ||
-        node.querySelector('[role="img"][aria-label*="star"]') ||
-        node.querySelector('[aria-label*="顆星"]') ||
-        node.querySelector('[aria-label*="star"]');
-      const ratingLabel = ratingElement?.getAttribute("aria-label") || "";
-      const ratingMatch = ratingLabel.match(/([\d.]+)/);
+      const ratingResult = extractRating(node);
 
       const dateText =
         textOf(".rsqaWe") ||
@@ -637,14 +648,68 @@ async function extractReviews(page) {
       return {
         id: node.getAttribute("data-review-id") || "",
         author,
-        rating: ratingMatch ? Number(ratingMatch[1]) : null,
-        ratingLabel,
+        rating: ratingResult.rating,
+        ratingLabel: ratingResult.label,
         likeCount: extractLikeCount(node),
         dateText,
         text: cleanupReviewText(reviewText),
         raw: cleanupReviewText(rawText),
       };
     });
+
+    function extractRating(node) {
+      const attributeCandidates = Array.from(
+        node.querySelectorAll("[aria-label], [title], [data-tooltip], [data-value]")
+      ).flatMap((element) => [
+        element.getAttribute("aria-label") || "",
+        element.getAttribute("title") || "",
+        element.getAttribute("data-tooltip") || "",
+        element.getAttribute("data-value") || "",
+      ]);
+
+      const textCandidates = [
+        ...Array.from(
+          node.querySelectorAll(
+            '[role="img"], [class*="kvMYJc"], [class*="fzvQIb"], [class*="ceNzKf"], [class*="lTi8oc"]'
+          )
+        ).map((element) => element.textContent || ""),
+      ];
+
+      for (const candidate of [...attributeCandidates, ...textCandidates]) {
+        const rating = parseRating(candidate);
+        if (rating !== null) {
+          return { rating, label: String(candidate || "").trim() };
+        }
+      }
+
+      return { rating: null, label: "" };
+    }
+
+    function parseRating(value) {
+      const text = String(value || "").replace(",", ".").trim();
+      if (!text) {
+        return null;
+      }
+
+      const patterns = [
+        /([1-5](?:\.\d)?)\s*(顆星|星|stars?|\/\s*5|分)/i,
+        /(評分|分數|rating|rated|rate|給予|給了)[^\d]{0,12}([1-5](?:\.\d)?)/i,
+        /([1-5](?:\.\d)?)[^\d]{0,12}(滿分|out of)\s*5/i,
+      ];
+
+      for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (!match) {
+          continue;
+        }
+        const numeric = Number((match[2] && /^\d/.test(match[2]) ? match[2] : match[1]).replace(",", "."));
+        if (Number.isFinite(numeric) && numeric >= 1 && numeric <= 5) {
+          return numeric;
+        }
+      }
+
+      return null;
+    }
 
     function extractLikeCount(node) {
       const candidates = [
@@ -1018,6 +1083,28 @@ async function closeBrowserSession(browserSession, timeoutMs = 10000) {
   }
 }
 
+function cleanupProfileCache(profileDir) {
+  if (!profileDir) {
+    return;
+  }
+
+  const root = path.resolve(profileDir);
+  for (const relativePath of PROFILE_CACHE_PATHS) {
+    const target = path.resolve(root, relativePath);
+    if (!target.startsWith(`${root}${path.sep}`)) {
+      continue;
+    }
+
+    try {
+      fs.rmSync(target, { force: true, recursive: true });
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        console.warn(`Could not clean profile cache ${relativePath}: ${error.message}`);
+      }
+    }
+  }
+}
+
 async function extractPlaceName(page) {
   const heading = await page
     .locator("h1")
@@ -1191,6 +1278,9 @@ async function main() {
     throw error;
   } finally {
     await closeBrowserSession(browserSession);
+    if (options.cleanupProfileCache) {
+      cleanupProfileCache(options.profileDir);
+    }
   }
 }
 

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.guyk.google-review-scraper-mcp</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Applications/Codex.app/Contents/Resources/node</string>
+    <string>/path/to/google-review-scraper-mcp/mcp-server.mjs</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/path/to/google-review-scraper-mcp</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>MCP_SHARED_SECRET</key>
+    <string>replace-with-a-random-secret</string>
+    <key>MCP_HOST</key>
+    <string>127.0.0.1</string>
+    <key>MCP_PORT</key>
+    <string>8787</string>
+    <key>PATH</key>
+    <string>/Applications/Codex.app/Contents/Resources:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>/path/to/google-review-scraper-mcp/logs/mcp-launchd.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/path/to/google-review-scraper-mcp/logs/mcp-launchd.err.log</string>
+</dict>
+</plist>

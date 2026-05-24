@@ -25,6 +25,19 @@ const SCRAPE_TIMEOUT_MS = Number(process.env.SCRAPE_TIMEOUT_MS || 300000);
 const FINISHED_JOB_TTL_MS = Number(process.env.MCP_FINISHED_JOB_TTL_MS || 3600000);
 const KEEP_JOB_FILES = process.env.MCP_KEEP_JOB_FILES === "true";
 const MAX_JOB_LOG_LINES = 300;
+const PROFILE_CACHE_PATHS = [
+  "Default/Cache",
+  "Default/Code Cache",
+  "Default/GPUCache",
+  "Default/DawnGraphiteCache",
+  "Default/DawnWebGPUCache",
+  "Default/ShaderCache",
+  "Default/GrShaderCache",
+  "Default/GraphiteDawnCache",
+  "GrShaderCache",
+  "ShaderCache",
+  "GraphiteDawnCache",
+];
 let scrapeQueue = Promise.resolve();
 const scrapeJobs = new Map();
 const jobsByKey = new Map();
@@ -63,6 +76,42 @@ function createServer() {
         },
       ],
     })
+  );
+
+  server.registerTool(
+    "get_google_restaurant_review_analysis_prompt",
+    {
+      title: "Get Traditional Chinese restaurant review analysis prompt",
+      description:
+        "Returns the Traditional Chinese restaurant review analysis template. Use this when the MCP client does not expose MCP prompts/list or prompts/get. After retrieving this template, scrape reviews with start_google_reviews_scrape and get_google_reviews_scrape_result, then format the final answer according to the returned template.",
+      inputSchema: {
+        months: z.number().int().min(1).max(24).default(8).describe("Recent month window to place into the prompt template. Default: 8."),
+      },
+      outputSchema: {
+        name: z.string(),
+        title: z.string(),
+        months: z.number(),
+        prompt: z.string(),
+      },
+    },
+    async ({ months = 8 }) => {
+      const normalizedMonths = Number(normalizePromptMonths(months));
+      const prompt = buildRestaurantAnalysisPrompt(normalizedMonths);
+      return {
+        structuredContent: {
+          name: "google_restaurant_review_analysis_zh_tw",
+          title: "Google 餐廳評論分析（繁體中文）",
+          months: normalizedMonths,
+          prompt,
+        },
+        content: [
+          {
+            type: "text",
+            text: prompt,
+          },
+        ],
+      };
+    }
   );
 
   server.registerTool(
@@ -383,6 +432,7 @@ async function runScrapeJob(job) {
       clearTimeout(forceKillTimeout);
     }
   });
+  await cleanupProfileCache(process.env.PROFILE_DIR || "./chrome-profile", job.log);
 
   if (exitCode !== 0) {
     if (await loadCompletedResult(job)) {
@@ -429,6 +479,24 @@ async function cleanupJobFiles(job) {
   await fs.rm(job.outputDir, { recursive: true, force: true }).catch((error) => {
     appendLog(job.log, `Could not remove job files: ${error.message}`);
   });
+}
+
+async function cleanupProfileCache(profileDir, log) {
+  if (process.env.CLEAN_PROFILE_CACHE === "false") {
+    return;
+  }
+
+  const root = path.resolve(__dirname, profileDir);
+  for (const relativePath of PROFILE_CACHE_PATHS) {
+    const target = path.resolve(root, relativePath);
+    if (!target.startsWith(`${root}${path.sep}`)) {
+      continue;
+    }
+
+    await fs.rm(target, { recursive: true, force: true }).catch((error) => {
+      appendLog(log, `Could not clean profile cache ${relativePath}: ${error.message}`);
+    });
+  }
 }
 
 function elapsedMs(job) {
