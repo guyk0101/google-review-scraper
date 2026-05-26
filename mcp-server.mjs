@@ -195,14 +195,14 @@ function createServer() {
       inputSchema: {
         jobId: z.string().trim().describe("The jobId returned by start_google_reviews_scrape."),
         batchIndex: z.number().int().min(1).default(1).describe("1-based batch index after applying the requested order and filters."),
-        batchSize: z.number().int().min(1).max(200).default(100).describe("Reviews per batch. Maximum 200."),
+        batchSize: z.number().int().min(1).max(200).default(200).describe("Reviews per batch. Maximum 200."),
         order: z.enum(["newest-first", "oldest-first"]).default("oldest-first").describe("Review order for batching. Use oldest-first when building historical-to-recent summaries."),
         ratings: z.array(z.number().int().min(1).max(5)).optional().describe("Optional rating filter, e.g. [1,2,3] for low-score reviews."),
         minLikeCount: z.number().int().min(0).optional().describe("Optional minimum likeCount/reaction count filter."),
       },
       outputSchema: scrapeBatchOutputSchema(),
     },
-    async ({ jobId, batchIndex = 1, batchSize = 100, order = "oldest-first", ratings, minLikeCount }) => {
+    async ({ jobId, batchIndex = 1, batchSize = 200, order = "oldest-first", ratings, minLikeCount }) => {
       const job = scrapeJobs.get(jobId);
       if (!job) {
         throw new Error("Unknown or expired scrape jobId. Start a new scrape only if you do not already have a valid jobId.");
@@ -252,7 +252,7 @@ function buildGoogleMapsAnalysisPrompt(months) {
 若工具回傳資料過大、工具要求分批讀取，或評論數量明顯很多：
 - 不要要求工具一次回傳完整 reviews JSON。
 - 先用 start_google_reviews_scrape 啟動 job，接著每 10 秒用 get_google_reviews_scrape_status 等待完成；不要用會回完整 reviews 的 get_google_reviews_scrape_result 等待大型資料。
-- job 完成後，使用 get_google_reviews_batch 逐批取得評論；建議 order=oldest-first、batchSize=100。
+- job 完成後，使用 get_google_reviews_batch 逐批取得評論；建議 order=oldest-first、batchSize=200。
 - 每批先建立內部批次筆記，不要直接輸出批次筆記給使用者。
 - 每批筆記至少保留：
   - 批次範圍與日期範圍
@@ -702,7 +702,7 @@ function resultJobResponse(job) {
 function statusJobResponse(job) {
   if (job.status === "done") {
     const structured = toStructuredContent(job.result);
-    const batchSize = 100;
+    const batchSize = 200;
     const totalReviews = structured.reviews.length;
     const totalBatches = Math.max(1, Math.ceil(totalReviews / batchSize));
     const message =
@@ -755,7 +755,7 @@ function batchJobResponse(job, options) {
   const structured = toStructuredContent(job.result);
   const allReviews = filterBatchReviews(structured.reviews, options);
   const orderedReviews = options.order === "oldest-first" ? [...allReviews].reverse() : [...allReviews];
-  const batchSize = Math.min(Math.max(Number(options.batchSize) || 100, 1), 200);
+  const batchSize = Math.min(Math.max(Number(options.batchSize) || 200, 1), 200);
   const totalBatches = Math.max(1, Math.ceil(orderedReviews.length / batchSize));
   const batchIndex = Math.min(Math.max(Number(options.batchIndex) || 1, 1), totalBatches);
   const offset = (batchIndex - 1) * batchSize;
