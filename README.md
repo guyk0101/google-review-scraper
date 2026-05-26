@@ -125,16 +125,17 @@ Run a Streamable HTTP MCP server so ChatGPT or another MCP client can call the s
 MCP_SHARED_SECRET="replace-with-a-long-random-secret" npm run mcp
 ```
 
-The server listens on `http://127.0.0.1:8787/mcp` by default. It exposes one prompt and two tools.
+The server listens on `http://127.0.0.1:8787/mcp` by default. It exposes one prompt and three tools.
 
 Prompt:
 
-- `google_restaurant_review_analysis_zh_tw`: Traditional Chinese restaurant review analysis prompt. It defaults to the most recent 8 months and formats the answer with low-score ratio, key negative reasons, positives, risks, and conclusion.
+- `google_maps_review_analysis_zh_tw`: Traditional Chinese Google Maps review analysis prompt for restaurants, hotels, attractions, shops, services, and other places. It defaults to the most recent 8 months and formats the answer with low-score ratio, key negative reasons, positives, risks, and conclusion. For large review sets, the prompt instructs clients to consume reviews in batches, keep representative evidence per batch, and merge newer and older batches into one final report.
 
 Tools:
 
 - `start_google_reviews_scrape`: starts a background scrape and returns a `jobId`. It does not return reviews. If the same `url`/`months`/`maxScrolls` job is already queued, running, or recently finished, it returns the existing `jobId` instead of starting a duplicate.
 - `get_google_reviews_scrape_result`: polls a `jobId`. Call it only after waiting 10 seconds after starting or after a previous `queued`/`running` response. If it returns `queued` or `running`, do not call `start_google_reviews_scrape` again; wait 10 seconds and poll the same `jobId`. When it returns `done`, it includes `metadata`, `reviews`, and a compact `summary`.
+- `get_google_maps_review_analysis_prompt`: returns the same Traditional Chinese analysis template as a tool for MCP clients that do not expose MCP prompt listing or prompt retrieval.
 
 The MCP tools always use the recent-months window, so `months` is the only time-range control. The default is `months: 8` and `maxScrolls: 120`. Large places can take several minutes in the background.
 

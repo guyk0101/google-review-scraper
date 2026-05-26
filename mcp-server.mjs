@@ -56,11 +56,11 @@ function createServer() {
   });
 
   server.registerPrompt(
-    "google_restaurant_review_analysis_zh_tw",
+    "google_maps_review_analysis_zh_tw",
     {
-      title: "Google 餐廳評論分析（繁體中文）",
+      title: "Google Maps 評論分析（繁體中文）",
       description:
-        "Analyze recent Google Maps restaurant reviews in Traditional Chinese. Use the Google Reviews Scraper background job tools, defaulting to the most recent 8 months.",
+        "Analyze recent Google Maps reviews for restaurants, hotels, attractions, and other places in Traditional Chinese. Use the Google Reviews Scraper background job tools, defaulting to the most recent 8 months.",
       argsSchema: {
         months: z.string().optional().describe("Recent month window to analyze. Default: 8."),
       },
@@ -71,7 +71,7 @@ function createServer() {
           role: "user",
           content: {
             type: "text",
-            text: buildRestaurantAnalysisPrompt(months),
+            text: buildGoogleMapsAnalysisPrompt(months),
           },
         },
       ],
@@ -79,11 +79,11 @@ function createServer() {
   );
 
   server.registerTool(
-    "get_google_restaurant_review_analysis_prompt",
+    "get_google_maps_review_analysis_prompt",
     {
-      title: "Get Traditional Chinese restaurant review analysis prompt",
+      title: "Get Traditional Chinese Google Maps review analysis prompt",
       description:
-        "Returns the Traditional Chinese restaurant review analysis template. Use this when the MCP client does not expose MCP prompts/list or prompts/get. After retrieving this template, scrape reviews with start_google_reviews_scrape and get_google_reviews_scrape_result, then format the final answer according to the returned template.",
+        "Returns the Traditional Chinese Google Maps review analysis template for restaurants, hotels, attractions, and other places. Use this when the MCP client does not expose MCP prompts/list or prompts/get. After retrieving this template, scrape reviews with start_google_reviews_scrape and get_google_reviews_scrape_result, then format the final answer according to the returned template.",
       inputSchema: {
         months: z.number().int().min(1).max(24).default(8).describe("Recent month window to place into the prompt template. Default: 8."),
       },
@@ -96,11 +96,11 @@ function createServer() {
     },
     async ({ months = 8 }) => {
       const normalizedMonths = Number(normalizePromptMonths(months));
-      const prompt = buildRestaurantAnalysisPrompt(normalizedMonths);
+      const prompt = buildGoogleMapsAnalysisPrompt(normalizedMonths);
       return {
         structuredContent: {
-          name: "google_restaurant_review_analysis_zh_tw",
-          title: "Google 餐廳評論分析（繁體中文）",
+          name: "google_maps_review_analysis_zh_tw",
+          title: "Google Maps 評論分析（繁體中文）",
           months: normalizedMonths,
           prompt,
         },
@@ -176,18 +176,18 @@ function normalizePromptMonths(months) {
   return String(Math.round(parsed));
 }
 
-function buildRestaurantAnalysisPrompt(months) {
+function buildGoogleMapsAnalysisPrompt(months) {
   const monthWindow = normalizePromptMonths(months);
-  return `# Google 餐廳評論分析（繁體中文）
+  return `# Google Maps 評論分析（繁體中文）
 
-你是一個 Google Maps 餐廳評論分析助理。當使用者提供 Google Maps 連結時，請使用 Google Reviews Scraper 工具抓取最近 ${monthWindow} 個月評論，預設 months = 8。
+你是一個 Google Maps 評論分析助理，適用於餐廳、飯店、景點、商店、服務場所與其他 Google Maps 地點。當使用者提供 Google Maps 連結時，請使用 Google Reviews Scraper 工具抓取最近 ${monthWindow} 個月評論，預設 months = 8。
 
 ## 分析規則
 
 低分定義為 1–3 星評論。
 
 請統計：
-- 店家名稱
+- 地點名稱
 - Google 整體評分
 - 最近 ${monthWindow} 個月平均評分
 - 擷取評論數
@@ -199,6 +199,23 @@ function buildRestaurantAnalysisPrompt(months) {
 - 若該評論是低分，需優先納入低分原因。
 - 若該評論是高分，可作為正面趨勢的重要依據。
 - 若沒有 likeCount 或沒有高互動評論，不需特別說明。
+
+## 大量評論／分批資料處理規則
+
+若工具回傳資料過大、工具要求分批讀取，或評論數量明顯很多：
+- 不要要求工具一次回傳完整 reviews JSON。
+- 請依工具提供的 jobId、batch index、offset、limit 或分頁資訊逐批取得評論。
+- 每批先建立內部批次筆記，不要直接輸出批次筆記給使用者。
+- 每批筆記至少保留：
+  - 批次範圍與日期範圍
+  - 該批評論數、平均分數、1–3 星低分數與低分佔比
+  - 主要低分原因與代表性 evidence
+  - 常見優點與代表性 evidence
+  - likeCount >= 2 的高互動評論重點
+  - 疑似誘導好評／優惠換評跡象與 evidence
+- 合併最終報告時，以較新的評論為主要判斷依據，較舊評論作為背景或趨勢比較。
+- 若新舊批次結論衝突，需明確說明「早期評論提到 X，近期評論則顯示 Y」。
+- 不要只用舊批次的摘要取代原始證據；每個重要結論至少保留可回溯的評論重點。
 
 ## 五星／打卡／優惠換評判斷
 
@@ -223,7 +240,7 @@ function buildRestaurantAnalysisPrompt(months) {
 
 ## 輸出格式
 
-# **{{店家名稱}}**
+# **{{地點名稱}}**
 
 > 查詢範圍：最近 ${monthWindow} 個月，約 YYYY-MM-DD 至 YYYY-MM-DD  
 > 擷取評論數：N 則  
@@ -267,19 +284,19 @@ function buildRestaurantAnalysisPrompt(months) {
 
 | 面向 | 評價重點 |
 |---|---|
-| 餐點 | 常被稱讚的餐點或口味 |
-| 服務 | 服務態度、出餐速度、流程 |
-| 環境 | 空間、清潔、氣氛 |
-| 便利性 | 停車、訂位、聚餐適合度 |
+| 產品／體驗 | 餐點、住宿、景點、商品或服務本身的評價重點 |
+| 服務 | 服務態度、處理速度、流程、入住／用餐／消費體驗 |
+| 環境／設施 | 空間、清潔、氣氛、設備、房況或現場管理 |
+| 便利性 | 交通、停車、訂位、排隊、入住、付款或動線 |
 
 ### 近期評價觀察
-說明高分與低分之間的落差，以及實際用餐期待。
+說明高分與低分之間的落差，以及實際前往、消費或入住期待。
 
 ---
 
 ## 需要注意的地方
 
-### 用餐前建議
+### 前往／消費前建議
 
 | 注意事項 | 建議 |
 |---|---|
@@ -291,13 +308,13 @@ function buildRestaurantAnalysisPrompt(months) {
 
 ## 結論
 
-用一段話總結這家店是否值得去、主要優勢與主要風險。
+用一段話總結這個地點是否值得前往、消費或入住，並說明主要優勢與主要風險。
 
 若有誘導好評跡象，需補上：
 **疑似誘導好評／優惠換評風險：** 有評論提到相關優惠、贈品或要求好評，因此高分評論需保留解讀。
 
-**適合：** 適合哪些顧客。  
-**不太適合：** 不適合哪些顧客。`;
+**適合：** 適合哪些使用者、旅客、顧客或情境。
+**不太適合：** 不適合哪些使用者、旅客、顧客或情境。`;
 }
 
 function scrapeResultOutputSchema() {
