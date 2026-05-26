@@ -135,7 +135,7 @@ Tools:
 
 - `start_google_reviews_scrape`: starts a background scrape and returns a `jobId`. It does not return reviews. If the same `url`/`months`/`maxScrolls` job is already queued, running, or recently finished, it returns the existing `jobId` instead of starting a duplicate.
 - `get_google_reviews_scrape_status`: polls a `jobId` without returning the full `reviews` array. Use this for large places to avoid oversized MCP responses. When it returns `done`, it includes `metadata`, compact `summary`, and a recommended batch plan.
-- `get_google_reviews_batch`: returns bounded review batches after a job is done. Use `order: "oldest-first"` and `batchSize: 200` for historical-to-recent analysis, then merge batch notes into a final report weighted toward newer reviews.
+- `get_google_reviews_batch`: returns bounded, de-identified review batches after a job is done. Reviewer names/raw text/id fields are omitted and email addresses inside text are redacted. Use `order: "oldest-first"` and `batchSize: 200` for historical-to-recent analysis, then merge batch notes into a final report weighted toward newer reviews.
 - `get_google_reviews_scrape_result`: legacy/full result polling. When it returns `done`, it includes `metadata`, `reviews`, and a compact `summary`. For large places, prefer `get_google_reviews_scrape_status` plus `get_google_reviews_batch` instead of this full-result tool.
 - `get_google_maps_review_analysis_prompt`: returns the same Traditional Chinese analysis template as a tool for MCP clients that do not expose MCP prompt listing or prompt retrieval.
 

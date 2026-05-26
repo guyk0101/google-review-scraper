@@ -191,7 +191,7 @@ function createServer() {
     {
       title: "Get Google Maps reviews batch",
       description:
-        "BATCH READ: after a scrape job is done, retrieve reviews in bounded batches instead of requesting the full JSON. For analysis, read older batches first with order=oldest-first, keep internal notes with evidence, then read newer batches and make the final conclusion weighted toward recent reviews.",
+        "BATCH READ: after a scrape job is done, retrieve reviews in bounded batches instead of requesting the full JSON. Review output is de-identified: reviewer names/raw text/id fields are omitted and email addresses inside text are redacted. For analysis, read older batches first with order=oldest-first, keep internal notes with evidence, then read newer batches and make the final conclusion weighted toward recent reviews.",
       inputSchema: {
         jobId: z.string().trim().describe("The jobId returned by start_google_reviews_scrape."),
         batchIndex: z.number().int().min(1).default(1).describe("1-based batch index after applying the requested order and filters."),
@@ -752,7 +752,7 @@ function batchJobResponse(job, options) {
     );
   }
 
-  const structured = toStructuredContent(job.result);
+  const structured = toStructuredContent(job.result, { sanitizeReviews: false });
   const allReviews = filterBatchReviews(structured.reviews, options);
   const orderedReviews = options.order === "oldest-first" ? [...allReviews].reverse() : [...allReviews];
   const batchSize = Math.min(Math.max(Number(options.batchSize) || 200, 1), 200);
@@ -762,6 +762,7 @@ function batchJobResponse(job, options) {
   const reviews = orderedReviews.slice(offset, offset + batchSize);
   const batchStats = summarizeReviews(reviews);
   const dateRange = reviewDateRange(reviews);
+  const responseReviews = sanitizeReviewsForResponse(reviews, offset);
   const message =
     `Returned batch ${batchIndex}/${totalBatches} with ${reviews.length} reviews ` +
     `(${options.order}, ${orderedReviews.length} filtered reviews total).`;
@@ -788,7 +789,7 @@ function batchJobResponse(job, options) {
         minLikeCount: Number.isFinite(options.minLikeCount) ? options.minLikeCount : null,
       },
       batchStats,
-      reviews,
+      reviews: responseReviews,
     },
     content: [
       {
@@ -873,6 +874,58 @@ function reviewDateRange(reviews) {
   };
 }
 
+const REVIEW_PRIVATE_FIELDS = new Set([
+  "author",
+  "email",
+  "id",
+  "name",
+  "raw",
+  "reviewer",
+  "reviewerName",
+]);
+
+function sanitizeReviewsForResponse(reviews, offset = 0) {
+  return reviews.map((review, index) => {
+    const sanitized = {
+      reviewNumber: offset + index + 1,
+    };
+
+    for (const [key, value] of Object.entries(review || {})) {
+      if (REVIEW_PRIVATE_FIELDS.has(key)) {
+        continue;
+      }
+
+      sanitized[key] = sanitizeValueForResponse(value);
+    }
+
+    return sanitized;
+  });
+}
+
+function sanitizeValueForResponse(value) {
+  if (typeof value === "string") {
+    return redactEmails(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(sanitizeValueForResponse);
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([key]) => !REVIEW_PRIVATE_FIELDS.has(key))
+        .map(([key, nestedValue]) => [key, sanitizeValueForResponse(nestedValue)])
+    );
+  }
+
+  return value;
+}
+
+function redactEmails(value) {
+  return value.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted-email]");
+}
+
 function cleanupFinishedJobs() {
   const cutoff = Date.now() - FINISHED_JOB_TTL_MS;
   for (const [id, job] of scrapeJobs) {
@@ -896,14 +949,15 @@ function lastLogLines(log) {
   return log.slice(-12).join(" ");
 }
 
-function toStructuredContent(data) {
+function toStructuredContent(data, { sanitizeReviews = true } = {}) {
   const metadata = data.metadata || {};
   const summary = metadata.summary || {};
   const ratingComparison = metadata.ratingComparison || {};
+  const reviews = Array.isArray(data.reviews) ? data.reviews : [];
 
   return {
     metadata,
-    reviews: Array.isArray(data.reviews) ? data.reviews : [],
+    reviews: sanitizeReviews ? sanitizeReviewsForResponse(reviews) : reviews,
     summary: {
       placeName: metadata.placeName || null,
       overallRating: numberOrNull(metadata.overallRating),
