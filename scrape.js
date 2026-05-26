@@ -10,6 +10,8 @@ const DEFAULT_SCROLL_DELAY_MS = 2000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
 const DEFAULT_STALE_SCROLL_LIMIT = 4;
 const DEFAULT_SCROLL_STEP_MULTIPLIER = 1.6;
+const DEFAULT_MIN_RANGE_STOP_REVIEWS = 20;
+const DEFAULT_RANGE_STOP_TAIL_COUNT = 4;
 const REVIEW_CARD_SELECTOR = "div.jftiEf, div[data-review-id]";
 const PROFILE_LOCK_FILES = [
   "SingletonCookie",
@@ -44,6 +46,8 @@ function parseArgs(argv) {
     pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || DEFAULT_POLL_INTERVAL_MS),
     staleScrollLimit: Number(process.env.STALE_SCROLL_LIMIT || DEFAULT_STALE_SCROLL_LIMIT),
     scrollStepMultiplier: Number(process.env.SCROLL_STEP_MULTIPLIER || DEFAULT_SCROLL_STEP_MULTIPLIER),
+    minRangeStopReviews: Number(process.env.MIN_RANGE_STOP_REVIEWS || DEFAULT_MIN_RANGE_STOP_REVIEWS),
+    rangeStopTailCount: Number(process.env.RANGE_STOP_TAIL_COUNT || DEFAULT_RANGE_STOP_TAIL_COUNT),
     locale: process.env.LOCALE || DEFAULT_LOCALE,
     timezone: process.env.TIMEZONE || "",
     viewportWidth: Number(process.env.VIEWPORT_WIDTH || 1440),
@@ -180,6 +184,14 @@ function parseArgs(argv) {
 
   if (!Number.isFinite(options.staleScrollLimit) || options.staleScrollLimit <= 0) {
     throw new Error("--stale-scroll-limit must be a positive number");
+  }
+
+  if (!Number.isFinite(options.minRangeStopReviews) || options.minRangeStopReviews <= 0) {
+    throw new Error("MIN_RANGE_STOP_REVIEWS must be a positive number");
+  }
+
+  if (!Number.isFinite(options.rangeStopTailCount) || options.rangeStopTailCount <= 0) {
+    throw new Error("RANGE_STOP_TAIL_COUNT must be a positive number");
   }
 
   if (!Number.isFinite(options.scrollStepMultiplier) || options.scrollStepMultiplier <= 0) {
@@ -962,17 +974,25 @@ function normalizeReviews(reviews, cutoffDate, now = new Date()) {
     });
 }
 
-function shouldStopForRange(reviews, cutoffDate) {
+function shouldStopForRange(reviews, cutoffDate, options) {
+  if (reviews.length < options.minRangeStopReviews) {
+    return false;
+  }
+
   const datedReviews = reviews
     .map((review) => parseReviewDate(review.dateText).date)
     .filter(Boolean);
 
-  if (datedReviews.length < 8) {
+  if (datedReviews.length < options.minRangeStopReviews) {
     return false;
   }
 
-  const oldest = new Date(Math.min(...datedReviews.map((date) => date.getTime())));
-  return oldest < cutoffDate;
+  const tail = datedReviews.slice(-options.rangeStopTailCount);
+  if (tail.length < options.rangeStopTailCount) {
+    return false;
+  }
+
+  return tail.every((date) => date < cutoffDate);
 }
 
 async function scrollReviews(page, options, cutoffDate) {
@@ -990,7 +1010,7 @@ async function scrollReviews(page, options, cutoffDate) {
     normalized = normalizeReviews(extracted, cutoffDate);
     console.log(`Scroll ${i + 1}/${options.maxScrolls}: ${normalized.length} reviews loaded`);
 
-    if (shouldStopForRange(normalized, cutoffDate)) {
+    if (shouldStopForRange(normalized, cutoffDate, options)) {
       console.log("Reached reviews older than the requested window.");
       return normalized;
     }
