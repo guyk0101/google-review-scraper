@@ -10,7 +10,6 @@ const DEFAULT_SCROLL_DELAY_MS = 2000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
 const DEFAULT_STALE_SCROLL_LIMIT = 4;
 const DEFAULT_SCROLL_STEP_MULTIPLIER = 1.6;
-const DEFAULT_MIN_RANGE_STOP_REVIEWS = 20;
 const DEFAULT_RANGE_STOP_TAIL_COUNT = 4;
 const REVIEW_CARD_SELECTOR = "div.jftiEf, div[data-review-id]";
 const PROFILE_LOCK_FILES = [
@@ -46,7 +45,6 @@ function parseArgs(argv) {
     pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || DEFAULT_POLL_INTERVAL_MS),
     staleScrollLimit: Number(process.env.STALE_SCROLL_LIMIT || DEFAULT_STALE_SCROLL_LIMIT),
     scrollStepMultiplier: Number(process.env.SCROLL_STEP_MULTIPLIER || DEFAULT_SCROLL_STEP_MULTIPLIER),
-    minRangeStopReviews: Number(process.env.MIN_RANGE_STOP_REVIEWS || DEFAULT_MIN_RANGE_STOP_REVIEWS),
     rangeStopTailCount: Number(process.env.RANGE_STOP_TAIL_COUNT || DEFAULT_RANGE_STOP_TAIL_COUNT),
     locale: process.env.LOCALE || DEFAULT_LOCALE,
     timezone: process.env.TIMEZONE || "",
@@ -184,10 +182,6 @@ function parseArgs(argv) {
 
   if (!Number.isFinite(options.staleScrollLimit) || options.staleScrollLimit <= 0) {
     throw new Error("--stale-scroll-limit must be a positive number");
-  }
-
-  if (!Number.isFinite(options.minRangeStopReviews) || options.minRangeStopReviews <= 0) {
-    throw new Error("MIN_RANGE_STOP_REVIEWS must be a positive number");
   }
 
   if (!Number.isFinite(options.rangeStopTailCount) || options.rangeStopTailCount <= 0) {
@@ -975,24 +969,30 @@ function normalizeReviews(reviews, cutoffDate, now = new Date()) {
 }
 
 function shouldStopForRange(reviews, cutoffDate, options) {
-  if (reviews.length < options.minRangeStopReviews) {
-    return false;
-  }
-
   const datedReviews = reviews
     .map((review) => parseReviewDate(review.dateText).date)
     .filter(Boolean);
 
-  if (datedReviews.length < options.minRangeStopReviews) {
+  if (datedReviews.length < options.rangeStopTailCount) {
+    return false;
+  }
+
+  if (!isNewestFirstSorted(datedReviews)) {
     return false;
   }
 
   const tail = datedReviews.slice(-options.rangeStopTailCount);
-  if (tail.length < options.rangeStopTailCount) {
-    return false;
+  return tail.every((date) => date < cutoffDate);
+}
+
+function isNewestFirstSorted(dates) {
+  for (let i = 1; i < dates.length; i += 1) {
+    if (dates[i] > dates[i - 1]) {
+      return false;
+    }
   }
 
-  return tail.every((date) => date < cutoffDate);
+  return true;
 }
 
 async function scrollReviews(page, options, cutoffDate) {
