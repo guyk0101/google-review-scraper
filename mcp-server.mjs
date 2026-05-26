@@ -83,7 +83,7 @@ function createServer() {
     {
       title: "Get Traditional Chinese Google Maps review analysis prompt",
       description:
-        "Returns the Traditional Chinese Google Maps review analysis template for restaurants, hotels, attractions, and other places. Use this when the MCP client does not expose MCP prompts/list or prompts/get. After retrieving this template, scrape reviews with start_google_reviews_scrape and get_google_reviews_scrape_result, then format the final answer according to the returned template.",
+        "Returns the Traditional Chinese Google Maps review analysis template for restaurants, hotels, attractions, and other places. Use this when the MCP client does not expose MCP prompts/list or prompts/get. After retrieving this template, scrape reviews with start_google_reviews_scrape, poll large jobs with get_google_reviews_scrape_status, read reviews with get_google_reviews_batch, then format the final answer according to the returned template.",
       inputSchema: {
         months: z.number().int().min(1).max(24).default(8).describe("Recent month window to place into the prompt template. Default: 8."),
       },
@@ -119,7 +119,7 @@ function createServer() {
     {
       title: "Start Google Maps review scrape",
       description:
-        "START ONLY: create a background Google Maps review scrape job and return a jobId. Do not expect reviews from this tool. If the same url/months/maxScrolls job is already queued, running, or recently finished, this returns the existing jobId instead of starting a duplicate. After calling this tool, wait 10 seconds before calling get_google_reviews_scrape_result. If get_google_reviews_scrape_result returns status=queued or status=running, do not call this start tool again; wait 10 seconds and poll the same jobId.",
+        "START ONLY: create a background Google Maps review scrape job and return a jobId. Do not expect reviews from this tool. If the same url/months/maxScrolls job is already queued, running, or recently finished, this returns the existing jobId instead of starting a duplicate. After calling this tool, wait 10 seconds before polling. For large places, poll with get_google_reviews_scrape_status and then read reviews with get_google_reviews_batch. Do not call this start tool again for the same URL while the job is queued/running.",
       inputSchema: {
         url: z.string().trim().describe("Google Maps place URL, including maps.app.goo.gl short links."),
         months: z.number().int().min(1).max(24).default(8).describe("Number of recent months to scrape. This is the sole time-range control."),
@@ -149,7 +149,7 @@ function createServer() {
     {
       title: "Get Google Maps review scrape result",
       description:
-        "POLL ONLY: retrieve the status or completed JSON for a jobId returned by start_google_reviews_scrape. Call this only after waiting 10 seconds after start or after a previous queued/running response. If status=queued or status=running, do not call start_google_reviews_scrape again; wait 10 seconds and call this result tool again with the same jobId. Only when status=done should the reviews be summarized.",
+        "LEGACY FULL RESULT: retrieve status or the completed full review JSON for a jobId returned by start_google_reviews_scrape. This can be too large for places with many reviews. For large places, poll with get_google_reviews_scrape_status and read reviews with get_google_reviews_batch instead. Only use this full-result tool when the review set is small enough to fit in one MCP response.",
       inputSchema: {
         jobId: z.string().trim().describe("The jobId returned by start_google_reviews_scrape."),
       },
@@ -162,6 +162,53 @@ function createServer() {
       }
 
       return resultJobResponse(job);
+    }
+  );
+
+  server.registerTool(
+    "get_google_reviews_scrape_status",
+    {
+      title: "Get Google Maps review scrape status",
+      description:
+        "STATUS ONLY: poll a scrape job without returning the full reviews array. Use this for large places to avoid oversized MCP responses. Call it every 10 seconds until status=done, then call get_google_reviews_batch to read reviews in batches. Do not call start_google_reviews_scrape again for the same URL while this job is queued/running.",
+      inputSchema: {
+        jobId: z.string().trim().describe("The jobId returned by start_google_reviews_scrape."),
+      },
+      outputSchema: scrapeStatusOutputSchema(),
+    },
+    async ({ jobId }) => {
+      const job = scrapeJobs.get(jobId);
+      if (!job) {
+        throw new Error("Unknown or expired scrape jobId. Start a new scrape only if you do not already have a valid jobId.");
+      }
+
+      return statusJobResponse(job);
+    }
+  );
+
+  server.registerTool(
+    "get_google_reviews_batch",
+    {
+      title: "Get Google Maps reviews batch",
+      description:
+        "BATCH READ: after a scrape job is done, retrieve reviews in bounded batches instead of requesting the full JSON. For analysis, read older batches first with order=oldest-first, keep internal notes with evidence, then read newer batches and make the final conclusion weighted toward recent reviews.",
+      inputSchema: {
+        jobId: z.string().trim().describe("The jobId returned by start_google_reviews_scrape."),
+        batchIndex: z.number().int().min(1).default(1).describe("1-based batch index after applying the requested order and filters."),
+        batchSize: z.number().int().min(1).max(200).default(100).describe("Reviews per batch. Maximum 200."),
+        order: z.enum(["newest-first", "oldest-first"]).default("oldest-first").describe("Review order for batching. Use oldest-first when building historical-to-recent summaries."),
+        ratings: z.array(z.number().int().min(1).max(5)).optional().describe("Optional rating filter, e.g. [1,2,3] for low-score reviews."),
+        minLikeCount: z.number().int().min(0).optional().describe("Optional minimum likeCount/reaction count filter."),
+      },
+      outputSchema: scrapeBatchOutputSchema(),
+    },
+    async ({ jobId, batchIndex = 1, batchSize = 100, order = "oldest-first", ratings, minLikeCount }) => {
+      const job = scrapeJobs.get(jobId);
+      if (!job) {
+        throw new Error("Unknown or expired scrape jobId. Start a new scrape only if you do not already have a valid jobId.");
+      }
+
+      return batchJobResponse(job, { batchIndex, batchSize, order, ratings, minLikeCount });
     }
   );
 
@@ -204,7 +251,8 @@ function buildGoogleMapsAnalysisPrompt(months) {
 
 若工具回傳資料過大、工具要求分批讀取，或評論數量明顯很多：
 - 不要要求工具一次回傳完整 reviews JSON。
-- 請依工具提供的 jobId、batch index、offset、limit 或分頁資訊逐批取得評論。
+- 先用 start_google_reviews_scrape 啟動 job，接著每 10 秒用 get_google_reviews_scrape_status 等待完成；不要用會回完整 reviews 的 get_google_reviews_scrape_result 等待大型資料。
+- job 完成後，使用 get_google_reviews_batch 逐批取得評論；建議 order=oldest-first、batchSize=100。
 - 每批先建立內部批次筆記，不要直接輸出批次筆記給使用者。
 - 每批筆記至少保留：
   - 批次範圍與日期範圍
@@ -338,6 +386,73 @@ function scrapeResultOutputSchema() {
         ratingCounts: z.record(z.string(), z.number()),
       })
       .optional(),
+  };
+}
+
+function scrapeStatusOutputSchema() {
+  return {
+    status: z.enum(["queued", "running", "done", "failed"]),
+    jobId: z.string(),
+    message: z.string(),
+    nextPollSeconds: z.number(),
+    elapsedMs: z.number(),
+    log: z.array(z.string()),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+    summary: z
+      .object({
+        placeName: z.string().nullable(),
+        overallRating: z.number().nullable(),
+        recentAverageRating: z.number().nullable(),
+        reviewCount: z.number(),
+        lowScoreCount: z.number(),
+        ratingTrend: z.string(),
+        ratingCounts: z.record(z.string(), z.number()),
+      })
+      .optional(),
+    batchPlan: z
+      .object({
+        recommendedOrder: z.string(),
+        recommendedBatchSize: z.number(),
+        totalReviews: z.number(),
+        totalBatches: z.number(),
+        nextTool: z.string(),
+      })
+      .optional(),
+  };
+}
+
+function scrapeBatchOutputSchema() {
+  return {
+    status: z.enum(["done"]),
+    jobId: z.string(),
+    message: z.string(),
+    batch: z.object({
+      index: z.number(),
+      size: z.number(),
+      totalBatches: z.number(),
+      order: z.enum(["newest-first", "oldest-first"]),
+      offset: z.number(),
+      returnedCount: z.number(),
+      totalFilteredReviews: z.number(),
+      hasPreviousBatch: z.boolean(),
+      hasNextBatch: z.boolean(),
+      dateRange: z.object({
+        oldest: z.string().nullable(),
+        newest: z.string().nullable(),
+      }),
+    }),
+    filters: z.object({
+      ratings: z.array(z.number()).nullable(),
+      minLikeCount: z.number().nullable(),
+    }),
+    batchStats: z.object({
+      reviewCount: z.number(),
+      averageRating: z.number().nullable(),
+      lowScoreCount: z.number(),
+      ratingCounts: z.record(z.string(), z.number()),
+      highInteractionCount: z.number(),
+    }),
+    reviews: z.array(z.record(z.string(), z.unknown())),
   };
 }
 
@@ -534,8 +649,8 @@ function baseJobContent(job, message) {
 function startJobResponse(job) {
   const message =
     job.status === "done"
-      ? `Scrape job ${job.id} is already done. Call get_google_reviews_scrape_result with this jobId to retrieve the review JSON.`
-      : `Scrape job ${job.id} is ${job.status}. Wait 10 seconds, then call get_google_reviews_scrape_result with this same jobId. Do not start another job for the same URL unless this job fails.`;
+      ? `Scrape job ${job.id} is already done. For large places, call get_google_reviews_batch with this jobId to retrieve reviews in batches.`
+      : `Scrape job ${job.id} is ${job.status}. Wait 10 seconds, then call get_google_reviews_scrape_status with this same jobId. Do not start another job for the same URL unless this job fails.`;
   const structuredContent = baseJobContent(job, message);
 
   return {
@@ -581,6 +696,180 @@ function resultJobResponse(job) {
   return {
     structuredContent: baseJobContent(job, message),
     content: [{ type: "text", text: message }],
+  };
+}
+
+function statusJobResponse(job) {
+  if (job.status === "done") {
+    const structured = toStructuredContent(job.result);
+    const batchSize = 100;
+    const totalReviews = structured.reviews.length;
+    const totalBatches = Math.max(1, Math.ceil(totalReviews / batchSize));
+    const message =
+      `Scrape job ${job.id} is done with ${totalReviews} reviews for ${structured.summary.placeName || "the place"}. ` +
+      "For large review sets, call get_google_reviews_batch instead of get_google_reviews_scrape_result.";
+    const structuredContent = {
+      ...baseJobContent(job, message),
+      metadata: structured.metadata,
+      summary: structured.summary,
+      batchPlan: {
+        recommendedOrder: "oldest-first",
+        recommendedBatchSize: batchSize,
+        totalReviews,
+        totalBatches,
+        nextTool: "get_google_reviews_batch",
+      },
+    };
+
+    return {
+      structuredContent,
+      content: [{ type: "text", text: message }],
+    };
+  }
+
+  if (job.status === "failed") {
+    const message = job.error || "Scrape job failed.";
+    return {
+      structuredContent: baseJobContent(job, message),
+      content: [{ type: "text", text: message }],
+      isError: true,
+    };
+  }
+
+  const message =
+    `Scrape job ${job.id} is ${job.status}. ` +
+    "Do not call start_google_reviews_scrape again. Wait 10 seconds, then call get_google_reviews_scrape_status with this same jobId.";
+  return {
+    structuredContent: baseJobContent(job, message),
+    content: [{ type: "text", text: message }],
+  };
+}
+
+function batchJobResponse(job, options) {
+  if (job.status !== "done") {
+    throw new Error(
+      `Scrape job ${job.id} is ${job.status}. Wait 10 seconds, then call get_google_reviews_scrape_status before reading batches.`
+    );
+  }
+
+  const structured = toStructuredContent(job.result);
+  const allReviews = filterBatchReviews(structured.reviews, options);
+  const orderedReviews = options.order === "oldest-first" ? [...allReviews].reverse() : [...allReviews];
+  const batchSize = Math.min(Math.max(Number(options.batchSize) || 100, 1), 200);
+  const totalBatches = Math.max(1, Math.ceil(orderedReviews.length / batchSize));
+  const batchIndex = Math.min(Math.max(Number(options.batchIndex) || 1, 1), totalBatches);
+  const offset = (batchIndex - 1) * batchSize;
+  const reviews = orderedReviews.slice(offset, offset + batchSize);
+  const batchStats = summarizeReviews(reviews);
+  const dateRange = reviewDateRange(reviews);
+  const message =
+    `Returned batch ${batchIndex}/${totalBatches} with ${reviews.length} reviews ` +
+    `(${options.order}, ${orderedReviews.length} filtered reviews total).`;
+
+  return {
+    structuredContent: {
+      status: "done",
+      jobId: job.id,
+      message,
+      batch: {
+        index: batchIndex,
+        size: batchSize,
+        totalBatches,
+        order: options.order,
+        offset,
+        returnedCount: reviews.length,
+        totalFilteredReviews: orderedReviews.length,
+        hasPreviousBatch: batchIndex > 1,
+        hasNextBatch: batchIndex < totalBatches,
+        dateRange,
+      },
+      filters: {
+        ratings: Array.isArray(options.ratings) && options.ratings.length > 0 ? options.ratings : null,
+        minLikeCount: Number.isFinite(options.minLikeCount) ? options.minLikeCount : null,
+      },
+      batchStats,
+      reviews,
+    },
+    content: [
+      {
+        type: "text",
+        text:
+          `${message} Create internal notes for this batch, preserve representative evidence, ` +
+          "then request the next batch if hasNextBatch=true.",
+      },
+    ],
+  };
+}
+
+function filterBatchReviews(reviews, options) {
+  const ratingSet = Array.isArray(options.ratings) && options.ratings.length > 0
+    ? new Set(options.ratings.map(Number))
+    : null;
+  const minLikeCount = Number.isFinite(options.minLikeCount) ? Number(options.minLikeCount) : null;
+
+  return reviews.filter((review) => {
+    if (ratingSet && !ratingSet.has(Number(review.rating))) {
+      return false;
+    }
+
+    if (minLikeCount !== null && reviewLikeCount(review) < minLikeCount) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+function summarizeReviews(reviews) {
+  const ratingCounts = {};
+  let ratingTotal = 0;
+  let ratedCount = 0;
+  let lowScoreCount = 0;
+  let highInteractionCount = 0;
+
+  for (const review of reviews) {
+    const rating = Number(review.rating);
+    if (Number.isFinite(rating)) {
+      const key = String(rating);
+      ratingCounts[key] = (ratingCounts[key] || 0) + 1;
+      ratingTotal += rating;
+      ratedCount += 1;
+      if (rating >= 1 && rating <= 3) {
+        lowScoreCount += 1;
+      }
+    } else {
+      ratingCounts.unknown = (ratingCounts.unknown || 0) + 1;
+    }
+
+    if (reviewLikeCount(review) >= 2) {
+      highInteractionCount += 1;
+    }
+  }
+
+  return {
+    reviewCount: reviews.length,
+    averageRating: ratedCount > 0 ? ratingTotal / ratedCount : null,
+    lowScoreCount,
+    ratingCounts,
+    highInteractionCount,
+  };
+}
+
+function reviewLikeCount(review) {
+  const value = review.likeCount ?? review.reactionCount ?? review.likes;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function reviewDateRange(reviews) {
+  const dates = reviews
+    .map((review) => String(review.date || "").trim())
+    .filter(Boolean)
+    .sort();
+
+  return {
+    oldest: dates[0] || null,
+    newest: dates[dates.length - 1] || null,
   };
 }
 
